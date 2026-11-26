@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+
+# generated fixture repos (pnpm fixtures)
+test/fixtures/.repos/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+*.log
+.DS_Store
+.claude/settings.local.json

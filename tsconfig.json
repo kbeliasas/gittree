@@ -1,0 +1,25 @@
+{
+  // Server, shared code, tests, scripts and tool configs. The web app has its own
+  // tsconfig in src/web. Sources run directly under Node's type stripping in dev
+  // (hence .ts import extensions and erasable syntax only); tsdown builds dist/.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/server", "src/shared", "scripts", "test", "*.config.ts"],
+  "exclude": ["test/fixtures/.repos"]
+}
