@@ -7,8 +7,9 @@ updated: 2026-11-26
 
 ### Rule / Fact
 - **pnpm 12** enforces a minimum release age (it installs a slightly older version than `npm view` shows) and holds
-  packages that ship agent "skills" for approval. tsdown's skills are deliberately unapproved; the build doesn't need
-  them. Installing third-party agent skills into the project is the user's call — don't `pnpm approve --all`.
+  packages that ship agent "skills" for approval. tsdown's and @tanstack/react-router's skills are deliberately
+  unapproved; the build doesn't need them. Installing third-party agent skills into the project is the user's call —
+  don't `pnpm approve --all`.
 - **macOS `/usr/bin/git` is an xcrun shim** (~10 ms extra per spawn). App and fixture builder run
   `$(git --exec-path)/git` instead (`src/server/git/binary.ts`).
 - **Stopping git means killing its process group**: helpers (ssh, textconv) keep stdout open, and a plain kill made a

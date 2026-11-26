@@ -14,6 +14,7 @@ import type { GitRunner } from './git/runner.ts';
 import { consoleLogger, redactToken } from './logger.ts';
 import type { RepoRegistry } from './repos/registry.ts';
 import { authRoutes } from './routes/auth.ts';
+import { graphRoutes } from './routes/graph.ts';
 import { healthRoutes } from './routes/health.ts';
 import { repoRoutes } from './routes/repos.ts';
 import { installGuard } from './security/guard.ts';
@@ -83,6 +84,7 @@ export async function createApp(options: AppOptions): Promise<App> {
   authRoutes(app, { session: options.session, port });
   healthRoutes(app, { gitVersion: options.gitVersion });
   repoRoutes(app, { git: options.git, registry: options.registry });
+  graphRoutes(app, { git: options.git, registry: options.registry });
   await registerWeb(fastify, { webRoot: options.webRoot });
 
   return app;

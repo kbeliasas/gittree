@@ -1,5 +1,6 @@
 import type { RepoInfo, RepoSummary } from '../../shared/api.ts';
 import type { GitRunner } from '../git/runner.ts';
+import { readHead } from './head.ts';
 import type { Repo } from './repo.ts';
 
 export function toSummary(repo: Repo): RepoSummary {
@@ -9,30 +10,23 @@ export function toSummary(repo: Repo): RepoSummary {
 /** HEAD, shallow state and the size of the graph gittree will draw. */
 export async function readRepoInfo(git: GitRunner, repo: Repo, signal?: AbortSignal): Promise<RepoInfo> {
   const cwd = repo.path;
-  const [symbolic, verified, shallow] = await Promise.all([
-    // exit 1: detached HEAD
-    git.run('symbolic-ref', { cwd, signal, args: ['-q', 'HEAD'], okExitCodes: [0, 1] }),
-    // exit 1: unborn HEAD (no commits yet)
-    git.run('rev-parse', { cwd, signal, args: ['-q', '--verify'], revs: ['HEAD^{commit}'], okExitCodes: [0, 1] }),
+  const [head, shallow] = await Promise.all([
+    readHead(git, repo, signal),
     git.text('rev-parse', { cwd, signal, args: ['--is-shallow-repository'] }),
   ]);
-
-  const headRef = symbolic.exitCode === 0 ? symbolic.stdout.toString('utf8').trim() : null;
-  const branch = headRef?.startsWith('refs/heads/') ? headRef.slice('refs/heads/'.length) : headRef;
-  const sha = verified.exitCode === 0 ? verified.stdout.toString('utf8').trim() : null;
 
   // Same revisions the history graph will show.
   const count = await git.text('rev-list', {
     cwd,
     signal,
     args: ['--count', '--branches', '--remotes', '--tags'],
-    revs: sha ? ['HEAD'] : [],
+    revs: head.sha ? ['HEAD'] : [],
   });
 
   return {
     ...toSummary(repo),
     shallow: shallow.trim() === 'true',
-    head: { sha, branch },
+    head,
     commitCount: Number.parseInt(count.trim(), 10),
   };
 }

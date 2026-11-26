@@ -1,11 +1,43 @@
 @import 'tailwindcss';
 
 @layer base {
-  html {
+  :root {
     color-scheme: light dark;
+    --page-bg: #ffffff;
+    --selected-bg: #e0f2fe; /* sky-100 */
+
+    /* Branch-line palette (src/web/graph/colors.ts). Lane 0 is the default branch. */
+    --lane-0: #2563eb; /* blue */
+    --lane-1: #ea580c; /* orange */
+    --lane-2: #059669; /* emerald */
+    --lane-3: #db2777; /* pink */
+    --lane-4: #7c3aed; /* violet */
+    --lane-5: #ca8a04; /* yellow */
+    --lane-6: #0891b2; /* cyan */
+    --lane-7: #dc2626; /* red */
+    --lane-8: #65a30d; /* lime */
+    --lane-9: #c026d3; /* fuchsia */
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page-bg: #09090b; /* zinc-950 */
+      --selected-bg: #0c2d48;
+
+      --lane-0: #60a5fa;
+      --lane-1: #fb923c;
+      --lane-2: #34d399;
+      --lane-3: #f472b6;
+      --lane-4: #a78bfa;
+      --lane-5: #facc15;
+      --lane-6: #22d3ee;
+      --lane-7: #f87171;
+      --lane-8: #a3e635;
+      --lane-9: #e879f9;
+    }
   }
 
   body {
-    @apply bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+    @apply bg-[var(--page-bg)] text-zinc-900 antialiased dark:text-zinc-100;
   }
 }

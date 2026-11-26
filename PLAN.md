@@ -196,7 +196,7 @@ a repo):
 | Endpoint | Returns |
 |---|---|
 | `GET /api/repos` · `POST /api/repos {path}` | Recents + scanned repos · validate (`rev-parse --show-toplevel`) and add |
-| `GET /api/repos/:id/graph?order=date\|topo` | Snapshot id, HEAD, default branch, refs, commits |
+| `GET /api/repos/:id/graph?order=date\|topo&limit&cursor` | Snapshot id, HEAD, default branch, refs, commits — one page (default 10,000 commits); `page.next` continues it |
 | `GET /api/repos/:id/snapshot` | Current refs snapshot (focus check) |
 | `GET /api/repos/:id/messages` | Full messages for search |
 | `GET /api/repos/:id/commits/:sha?parent=1` | Committer, dates, changed files with +/−, renames |
@@ -210,29 +210,34 @@ a repo):
 Graph payload:
 
 ```ts
-interface GraphPayload {
-  snapshot: string;                         // hash of refs + HEAD
-  head: { sha: string; branch?: string };   // no branch = detached HEAD
-  defaultBranch: string;                    // origin/HEAD → main → master → develop
-  authors: { name: string; email: string }[];
+interface GraphPayload {                    // src/shared/api.ts is the source of truth
+  snapshot: string;                         // hash of refs + HEAD (+ shallow boundary)
+  order: 'date' | 'topo';
+  head: { sha: string | null; branch: string | null };  // null sha = no commits; null branch = detached
+  defaultBranch: string | null;             // origin/HEAD → main → master → develop → HEAD's branch → any
+  authors: { name: string; email: string }[];  // per page
   commits: {
     sha: string;
-    parents: number[];                      // indices into commits[]
-    boundary?: true;                        // has parents that aren't present (shallow clone)
+    parents: (number | string)[];           // index into the graph's commits, or the hash of a parent on a later page
+    boundary?: true;                        // shallow clone: parents aren't in the repository
     author: number;                         // index into authors[]
     authorTime: number;                     // unix seconds
     commitTime: number;
     subject: string;
   }[];
-  refs: {
+  refs: {                                   // refs pointing at commits on this page
     name: string;                           // "main", "origin/main", "v1.2.0"
     kind: 'local' | 'remote' | 'tag';
-    commit: number;                         // index into commits[]
+    commit: number;                         // index into the graph's commits
     upstream?: string;
     upstreamGone?: true;
   }[];
+  page: { offset: number; total: number; next: string | null };
 }
 ```
+
+The walk starts from the snapshot's own commit ids (`git log --stdin`), so a page always matches its snapshot; a
+cursor from an older snapshot gets `409 snapshot_changed`.
 
 ## 7. Graph layout and interaction
 
@@ -251,9 +256,13 @@ interface GraphPayload {
   local, remote, tags), stable via a hash of the name, tuned for light and dark themes, and never the only cue
   (badges and hover carry the same information).
 - **Rendering:** virtualized rows (~28 px); the graph column draws only the visible slice as SVG, which keeps
-  hit-testing and theming simple.
-- **Keyboard:** ↑/↓ or j/k move, `[` / `]` parent / child, Enter opens the first file's diff, `/` search,
-  Cmd+K palette, Cmd+P file finder, Esc clears focus.
+  hit-testing and theming simple. Lanes are straight; forks and merges run sideways and turn into their lane with
+  a rounded corner.
+- **Keyboard:** ↑/↓ or j/k move (PageUp/PageDown, Home/End jump), `[` / `]` parent / child along the line, Enter
+  opens the first file's diff, `/` search, Cmd+K palette, Cmd+P file finder, Esc clears focus. Clicks and
+  parent/child jumps add a Back entry; stepping with the keys replaces it.
+- **Where it runs:** lane layout and branch lines in the worker; hover, Alt+hover and focus reachability on the main
+  thread (well under a millisecond for 10k commits, and it has to keep up with the pointer).
 - **The URL holds the state** (repo, view, selection, filters): links are bookmarkable and browser Back/Forward
   retrace your exploration.
 - **Filter & focus:**
@@ -417,7 +426,7 @@ and `/auth` proxied) and the server in watch mode; `pnpm build && pnpm link --gl
 | # | Milestone | Delivers | Size |
 |---|---|---|---|
 | M0 | Skeleton — **done** | CLI → server → browser with token; git runner + allowlist; fixture builder; test setup | S |
-| M1 | Graph | Graph endpoint, lane-layout worker, virtualized list, ref badges, hover, selection, keyboard, URL state | L |
+| M1 | Graph — **done** | Paged graph endpoint (newest 10k + "N older not shown" notice), lane-layout worker, virtualized list, ref badges, hover, selection, keyboard, URL state, branch focus (badge click), commit summary panel from graph data | L |
 | M2 | Details & diffs | Details panel (merged commits, contained-in, Jira links), file list, diff viewer | M |
 | M3 | Search & focus | Filter bar + syntax, path/content search, dim/hide, branch visibility, first-parent, topology only | L |
 | M4 | Repos & fetch | Settings file, recents + scan roots, Cmd+K, single instance, fetch with progress, refresh banner | M |
@@ -440,7 +449,7 @@ example, stats before search).
 | Squash and rebase merges are invisible to "merged?" and habit stats | `git cherry` hint for rebases; squash merges estimated from messages and labeled as estimates |
 | Jira false positives (`UTF-8`, `SHA-256`) | Configured project keys; deny-list fallback |
 | One person with several emails skews stats | `.mailmap` (`%aN` / `%aE`); an alias editor later |
-| A repo outgrows 10k commits | The graph endpoint accepts `limit`/`cursor` from day one; above the cap it loads the newest 10k with "load more"; a real large-repo mode is a later project |
+| A repo outgrows 10k commits | The graph endpoint accepts `limit`/`cursor` from day one; above the cap the UI loads the newest 10k and says how many older commits aren't shown ("load more" later); a real large-repo mode is a later project |
 | Unusual repos (empty, shallow, detached HEAD, SHA-256, worktrees, submodules) | Each has a fixture and a defined UI state |
 
 ## 14. Defaults I picked (easy to change)

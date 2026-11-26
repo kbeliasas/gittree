@@ -1,0 +1,23 @@
+●            Release 1.1.0  (main, origin/main, v1.1.0)
+│ ●          SHOP-20 Search results  (origin/feature/SHOP-20-search)
+│ ●          SHOP-20 Search box
+○─┴─╮        Merge branch 'feature/SHOP-15-cart'
+│   ●        SHOP-15 Cart page  (origin/feature/SHOP-15-cart)
+│   ●        SHOP-15 Cart model
+●   │        Merge topics docs, ci and lint  [shallow boundary]
+  ● │        Topic: lint  (origin/topic/lint)
+  │ │ ●      Topic: ci  (origin/topic/ci)
+  │ │ │ ●    Topic: docs  (origin/topic/docs)
+  ○─┼─┴─┴─╮  Merge branch 'cross/b'
+  ● │     │  Merge branch 'cross/a'  [shallow boundary]
+    │     ●  Cross B: export metrics  (origin/cross/b)
+  ● │     │  Cross A: tune cache size  (origin/cross/a)
+  │ │ ╭───○  Merge cross/a into cross/b
+  ○─┼─┼───┤  Merge cross/b into cross/a
+  │ │ │   ●  Cross B: add metrics  [shallow boundary]
+  ●─┼─╯      Cross A: add cache  [shallow boundary]
+  ╭─○        Merge branch 'feature/SHOP-12-login'  (v1.0.0)
+  │ ●        Fix typo in README
+  ● │        SHOP-12 Login API client  (origin/feature/SHOP-12-login)
+  ● │        SHOP-12 Add login form
+  ●─╯        Add app shell  [shallow boundary]

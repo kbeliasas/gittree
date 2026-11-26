@@ -1,0 +1,6 @@
+●  Fix typo in README  (main)
+●  Document usage  (v1.1.0)
+●  Support custom punctuation
+●  Add tests for greeting  (v1.0.0)
+●  Add greeting module
+●  Initial commit

@@ -15,6 +15,8 @@ export default defineConfig({
     outDir: '../../dist/web',
     emptyOutDir: true,
   },
+  // The graph worker is an ES module; the CSP allows it because it's a same-origin file, not a blob.
+  worker: { format: 'es' },
   server: proxyTarget
     ? {
         proxy: {

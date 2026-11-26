@@ -16,6 +16,7 @@ const SAMPLES: Record<string, (repo: Repo) => string[]> = {
   'GET /api/health': () => ['/api/health'],
   'GET /api/repos': () => ['/api/repos'],
   'GET /api/repos/:id': (repo) => [`/api/repos/${repo.id}`],
+  'GET /api/repos/:id/graph': (repo) => [`/api/repos/${repo.id}/graph`, `/api/repos/${repo.id}/graph?order=topo&limit=3`],
 };
 
 /** Routes that never touch a repository. */

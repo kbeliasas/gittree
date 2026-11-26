@@ -1,0 +1,6 @@
+  ●  Publish site  (gh-pages)
+○─╮  Merge documentation history  (main)
+│ ●  Document install steps  (docs)
+│ ●  Start documentation site
+●    Add config
+●    Initial app

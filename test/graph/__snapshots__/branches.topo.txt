@@ -1,0 +1,19 @@
+●      Start 1.3 development  (main)
+●      Release 1.2.0  (origin/main)
+│ ●    Payments: error states  (feature/payments)
+│ ●    Payments: validation  (origin/feature/payments)
+│ ●    Payments: card form
+│ │ ●  Fix typo in checkout  (origin/hotfix/typo)
+●─┴─╯  Update dependencies
+│ ●    Guard against null customer  (bugfix/null-check)
+│ │ ●  Bump 1.x patch version  (origin/release/1.x)
+│ │ ●  Prepare 1.x release  (release/1.x)
+●─┴─╯  Tidy order list
+○─╮    Merge branch 'feature/SHOP-3-search'
+│ ●    SHOP-3 Search page  (feature/SHOP-3-search)
+│ ●    SHOP-3 Search index
+●─╯    Add order list
+│ ●    SHOP-7 Add export button  (feature/SHOP-7-export)
+│ ●    SHOP-7 Export orders as CSV
+●─╯    Add payments skeleton
+●      Initial commit

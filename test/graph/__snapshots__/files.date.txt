@@ -1,0 +1,10 @@
+●  Edit login and data  (main)
+●  Add generated data
+●  Delete format helper
+●  Link docs to README
+●  Make build script executable
+●  Add build script
+●  Update logo
+●  Move old helpers to legacy
+●  Rename auth to api/login
+●  Add auth module, helpers and assets

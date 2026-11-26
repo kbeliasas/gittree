@@ -1,0 +1,8 @@
+  ●  Wire login screen  (feature/SHOP-123-login)
+●─╯  Fix SHOP-12 login redirect  (main)
+●    Store dates as ISO-8601 strings
+●    Use SHA-256 for checksums
+●    Switch file encoding to UTF-8
+●    OPS-3 Configure CI pipeline
+●    SHOP-12 Add login form
+●    Initial commit
