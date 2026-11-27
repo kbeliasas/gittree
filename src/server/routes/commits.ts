@@ -36,7 +36,8 @@ export function commitRoutes(app: App, options: { git: GitRunner; registry: Repo
     const cached = details.get(key);
     if (cached) return cached;
     const value = await readCommitDetails(git, repo, sha, compare, signal, (meta) => loadCombined(repo, meta, false, signal));
-    details.set(key, value);
+    // Without the file contents, the list lacks counts and renames: read it again once git has them.
+    if (!value.compare?.contentsMissing) details.set(key, value);
     return value;
   };
 

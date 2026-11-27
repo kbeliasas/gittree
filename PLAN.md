@@ -181,7 +181,7 @@ git CLI → .git on disk        ~/.config/gittree (settings, recents)   ~/.cache
 | HEAD, default branch | `git symbolic-ref -q HEAD` · `git rev-parse HEAD` · `git symbolic-ref refs/remotes/origin/HEAD` |
 | Full messages (search) | `git log --format=%H%x00%B%x1e <same revs>`, loaded in the background |
 | Commit details | `git log -1 --date=raw --format=%H%x00%P%x00%aN…%cd%x00%B <sha>` |
-| Changed files | `git diff-tree -r -z -M --raw --numstat <parent> <sha>` (`--root <sha>` for root commits) · sizes from `git cat-file --batch-check` |
+| Changed files | `git diff-tree -r -z -M --raw --numstat <parent> <sha>` (`--root <sha>` for root commits) · sizes from `git cat-file --batch-check` · a partial clone without the contents: `--raw --no-renames` (no counts, no renames) |
 | One file's diff | `git diff-tree -p -U<n> [-w] [-M] <parent> <sha> -- [<old path>] <path>` — whole file as context up to 1 MiB, else `-U3` |
 | Conflict resolutions | `git diff-tree -r -z --cc --raw -p <merge>` — files without a `--cc` hunk (clean 3-way merges) are left out |
 | Path / content search | `git log --format=%H <revs> -- <path>` · `git log -S<text>` / `-G<regex>` |
@@ -470,7 +470,7 @@ example, stats before search).
 | The local server exposes your code to other web pages (DNS rebinding, CSRF) | 127.0.0.1 only, random port, token cookie, Host/Origin checks, no CORS |
 | Fetch hangs on a credential prompt | Prompts disabled, SSH batch mode, 60 s timeout, clear error |
 | Interfering with your IDE's git use | Read commands only, `GIT_OPTIONAL_LOCKS=0`, retry transient lock errors |
-| git downloads what a partial clone lacks whenever a diff (or a bare repo's `.mailmap`) needs it: network access and new packs | `GIT_NO_LAZY_FETCH=1` (git 2.44+); diffs that need missing contents answer 409 `objects_missing`; the read-only test covers two partial clones |
+| git downloads what a partial clone lacks whenever a diff (or a bare repo's `.mailmap`) needs it: network access and new packs | `GIT_NO_LAZY_FETCH=1` (git 2.44+); commit details then list files without counts or renames, and diffs that need missing contents answer 409 `objects_missing`; the read-only test covers two partial clones. M7's `log --numstat` stats will meet the same |
 | Squash and rebase merges are invisible to "merged?" and habit stats | `git cherry` hint for rebases; squash merges estimated from messages and labeled as estimates |
 | Jira false positives (`UTF-8`, `SHA-256`) | Configured project keys; deny-list fallback |
 | One person with several emails skews stats | `.mailmap` (`%aN` / `%aE`); an alias editor later |

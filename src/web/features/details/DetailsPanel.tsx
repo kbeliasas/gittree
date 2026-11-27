@@ -325,7 +325,17 @@ function ChangedFiles(props: {
   if (data.compare.files.length === 0) {
     return <Note>{compare === 'cc' ? 'No conflict resolutions: every change came from one of the parents.' : 'No files changed.'}</Note>;
   }
-  return <FileList files={data.compare.files} onOpen={onOpenFile} />;
+  return (
+    <>
+      {data.compare.contentsMissing && (
+        <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400" data-contents-missing>
+          No line counts or renames: this partial clone doesn’t store these files’ contents locally, and gittree doesn’t
+          download them.
+        </p>
+      )}
+      <FileList files={data.compare.files} onOpen={onOpenFile} />
+    </>
+  );
 }
 
 function Totals({ files }: { files: readonly ChangedFile[] }) {

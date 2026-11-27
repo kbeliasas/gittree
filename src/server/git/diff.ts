@@ -12,7 +12,7 @@ export interface RawChange {
   /** Blob (or, for submodules, commit) ids; all zeros where the file is absent. */
   oldObject: string;
   newObject: string;
-  /** null: binary. Undefined until the numstat part is read. */
+  /** From the numstat part; null: binary. Without one, 0 (commit.ts sets null when it didn't count). */
   additions: number | null;
   deletions: number | null;
 }

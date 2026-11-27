@@ -141,16 +141,23 @@ export async function readCommitDetails(
     return { ...base, compare: { with: 'cc', files: combined.files } };
   }
   const parent = parentFor(meta, compare);
-  const changes = await needingContents(
-    git,
-    repo,
-    readChanges(git, repo, parent, sha, signal),
-    'the contents of the files this commit changed',
-    downloadCommand(sha, parent),
-    signal,
-  );
+  let changes: RawChange[];
+  let contents = true;
+  try {
+    changes = await readChanges(git, repo, parent, sha, true, signal);
+  } catch (error) {
+    if (!(await isMissingObjectError(git, repo.path, error, signal))) throw error;
+    // A partial clone without the contents: list the changed paths without counts or renames.
+    changes = await readChanges(git, repo, parent, sha, false, signal);
+    contents = false;
+  }
+  // Blobs that aren't stored locally come back as "missing" and get no size.
   const sizes = await readSizes(git, repo, changes.flatMap((c) => [sizeable(c.oldMode, c.oldObject), sizeable(c.newMode, c.newObject)]), signal);
-  return { ...base, compare: { with: parent === null ? 'root' : compare, files: changes.map((change) => toChangedFile(change, sizes)) } };
+  const files = changes.map((change) => toChangedFile(change, sizes, contents));
+  return {
+    ...base,
+    compare: { with: parent === null ? 'root' : compare, files, ...(contents ? {} : { contentsMissing: true as const }) },
+  };
 }
 
 /** The parent to compare with, or null for a root commit (compared with the empty tree). */
@@ -164,18 +171,38 @@ function parentFor(meta: CommitMeta, n: number): string | null {
   return parent;
 }
 
-async function readChanges(git: GitRunner, repo: Repo, parent: string | null, sha: string, signal?: AbortSignal): Promise<RawChange[]> {
+/**
+ * The files changed between `parent` (null: the empty tree) and `sha`. With `contents`, git reads
+ * them to count lines and detect renames. Without, it compares tree entries only, so it works in a
+ * partial clone that lacks the contents; counts are null, and a rename is a deletion plus an addition.
+ */
+async function readChanges(
+  git: GitRunner,
+  repo: Repo,
+  parent: string | null,
+  sha: string,
+  contents: boolean,
+  signal?: AbortSignal,
+): Promise<RawChange[]> {
   const output = await git.text('diff-tree', {
     cwd: repo.path,
     signal,
-    args: ['-r', '-z', '-M', '--raw', '--numstat', ...PLAIN_DIFF, ...(parent === null ? ['--root'] : [])],
+    args: [
+      '-r',
+      '-z',
+      ...(contents ? ['-M', '--raw', '--numstat'] : ['--raw', '--no-renames']),
+      ...PLAIN_DIFF,
+      ...(parent === null ? ['--root'] : []),
+    ],
     revs: parent === null ? [sha] : [parent, sha],
     paths: [],
   });
-  return parseRawNumstat(output);
+  const changes = parseRawNumstat(output);
+  return contents ? changes : changes.map((change) => ({ ...change, additions: null, deletions: null }));
 }
 
-function toChangedFile(change: RawChange, sizes: ReadonlyMap<string, number>): ChangedFile {
+/** `contents`: whether the counts were read (null counts then mean a binary file). */
+function toChangedFile(change: RawChange, sizes: ReadonlyMap<string, number>, contents: boolean): ChangedFile {
   const file: ChangedFile = {
     path: change.path,
     status: change.status,
@@ -186,7 +213,7 @@ function toChangedFile(change: RawChange, sizes: ReadonlyMap<string, number>): C
   };
   if (change.oldPath !== undefined) file.oldPath = change.oldPath;
   if (change.similarity !== undefined) file.similarity = change.similarity;
-  if (change.additions === null) file.binary = true;
+  if (contents && change.additions === null) file.binary = true;
   const oldSize = sizes.get(change.oldObject);
   const newSize = sizes.get(change.newObject);
   if (oldSize !== undefined && sizeable(change.oldMode, change.oldObject)) file.oldSize = oldSize;

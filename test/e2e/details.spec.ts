@@ -250,19 +250,26 @@ test.describe('partial clone', () => {
   });
   test.afterAll(() => close(s));
 
-  test('says which file contents aren’t stored locally instead of downloading them', async () => {
+  test('lists the changed files without counts; a diff says its file contents aren’t stored locally', async () => {
     const { page } = s;
-    const download = `git diff ${shas['conflict-merge']!.slice(0, 12)} ${shas.head!.slice(0, 12)}`;
     await page.goto(`${s.historyUrl}?sel=${shas.head}`);
-    await expect(panel(page).getByRole('heading', { level: 2 })).toHaveText('Indent limits by four spaces');
-    await expect(panel(page)).toContainText(
-      "Couldn’t load the changes: This repository is a partial clone, and the contents of the files this commit changed aren't stored locally.",
+    const files = panel(page).getByRole('region', { name: 'Changed files' });
+    await expect(files.locator('[data-contents-missing]')).toContainText('this partial clone doesn’t store these files’ contents locally');
+    await fileButton(files, 'src/limits.ts').click();
+    await expect(diff(page)).toContainText(
+      "Couldn’t load the diff: This repository is a partial clone, and the file versions this diff compares aren't stored locally.",
     );
-    await expect(panel(page)).toContainText(`To download them, run this in the repository: ${download}`);
-
-    // A link straight to a diff says the same where the diff would be.
-    await page.goto(`${s.historyUrl}?sel=${shas.head}&file=src%2Flimits.ts`);
+    const download = `git diff ${shas['conflict-merge']!.slice(0, 12)} ${shas.head!.slice(0, 12)}`;
     await expect(diff(page)).toContainText(`To download them, run this in the repository: ${download}`);
+  });
+
+  test('conflict resolutions say so too, and nothing was downloaded', async () => {
+    const { page } = s;
+    await page.goto(`${s.historyUrl}?sel=${shas['conflict-merge']}`);
+    await panel(page).getByRole('group', { name: 'Compare with' }).getByRole('button', { name: 'conflicts' }).click();
+    await expect(panel(page)).toContainText(
+      "Couldn’t load the changes: This repository is a partial clone, and the contents of the files this merge changed aren't stored locally.",
+    );
     expect(packs()).toEqual(before);
   });
 });

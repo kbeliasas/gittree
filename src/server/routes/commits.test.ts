@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { DAY, fixtureGit, T0, type FixtureName } from '../../../test/fixtures/build.ts';
@@ -8,7 +12,7 @@ import { readCommitDetails, readCombined, readFileDiff } from '../commits/commit
 
 const fixtures = inject('fixtures');
 const { repos } = fixtures;
-const NAMES: FixtureName[] = ['files', 'merges', 'people', 'conflicts', 'shallow', 'submodule', 'linear', 'partial'];
+const NAMES: FixtureName[] = ['files', 'merges', 'people', 'conflicts', 'shallow', 'submodule', 'linear', 'partial', 'partialBare'];
 
 let t: TestApp;
 let cookie: string;
@@ -227,6 +231,61 @@ describe('GET /api/repos/:id/diff', () => {
 // Older git would download the missing contents into the shared fixture instead (see test/helpers/git.ts).
 describe.skipIf(!NO_LAZY_FETCH_SUPPORTED)('a partial clone without the file contents a diff needs', () => {
   const short = (label: string) => sha('partial', label).slice(0, 12);
+
+  it('still lists the files a commit changed, without line counts', async () => {
+    const details = await commit('partial', 'head');
+    expect(details.message).toBe('Indent limits by four spaces');
+    // HEAD's version was checked out, so its size is known; the version before isn't stored.
+    expect(details.compare).toEqual({
+      with: 1,
+      contentsMissing: true,
+      files: [
+        { path: 'src/limits.ts', status: 'modified', additions: null, deletions: null, oldMode: '100644', newMode: '100644', newSize: expect.any(Number) },
+      ],
+    });
+  });
+
+  it('keeps the whole message even where no file contents are stored', async () => {
+    const details = await commit('partialBare', 'keys-in-body');
+    expect(details.message).toBe('Store dates as ISO-8601 strings\n\nRefs SHOP-15 and OPS-7.');
+    expect(details.compare).toMatchObject({ contentsMissing: true, files: [{ status: 'added', additions: null, deletions: null }] });
+  });
+
+  describe('in a clone of the files fixture', () => {
+    let dir: string;
+    let local: TestApp;
+    let localCookie: string;
+    beforeAll(async () => {
+      dir = mkdtempSync(join(tmpdir(), 'gittree-partial-files-'));
+      // Without a checkout no file contents are stored at all (and fixtureGit never downloads any).
+      fixtureGit(fixtures, dir, ['clone', '-q', '--no-checkout', '--filter=blob:none', `file://${repos.files.dir}`, 'files']);
+      local = await makeTestApp([join(dir, 'files')]);
+      localCookie = await signIn(local);
+    });
+    afterAll(async () => {
+      await local.app.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const details = async (label: string) => {
+      const url = `/api/repos/${local.repos[0]!.id}/commits/${sha('files', label)}`;
+      const response = await local.app.inject({ url, headers: { host: HOST, cookie: localCookie } });
+      expect(response.statusCode, response.body).toBe(200);
+      return json<CommitDetails>(response);
+    };
+
+    it('lists a rename as a deletion plus an addition, and calls nothing binary', async () => {
+      expect((await details('rename')).compare).toMatchObject({
+        contentsMissing: true,
+        files: [
+          { path: 'src/api/login.ts', status: 'added', additions: null, deletions: null },
+          { path: 'src/auth.ts', status: 'deleted', additions: null, deletions: null },
+        ],
+      });
+      const binary = (await details('binary')).compare?.files;
+      expect(binary).toEqual([expect.objectContaining({ path: 'assets/logo.png', additions: null })]);
+      expect(binary?.[0]).not.toHaveProperty('binary');
+    });
+  });
 
   /** A 409 that says what isn't stored locally and which git command would download it. */
   async function expectNotStored(url: string, download: string): Promise<void> {

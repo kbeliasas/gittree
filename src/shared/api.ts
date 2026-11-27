@@ -195,7 +195,7 @@ export const ChangedFile = z.object({
   status: FileStatus,
   /** Renames and copies: similarity in percent. */
   similarity: z.number().int().min(0).max(100).optional(),
-  /** Lines added and removed; null for binary files and in conflict-resolution lists. */
+  /** Lines added and removed; null for binary files, in conflict-resolution lists and without contents (`contentsMissing`). */
   additions: z.number().int().nonnegative().nullable(),
   deletions: z.number().int().nonnegative().nullable(),
   binary: z.literal(true).optional(),
@@ -224,6 +224,11 @@ export const CommitDetails = z.object({
       /** A parent number, `cc` (conflict resolutions) or `root` (a root commit: everything is new). */
       with: z.union([z.number().int().min(1), z.literal('cc'), z.literal('root')]),
       files: z.array(ChangedFile),
+      /**
+       * A partial clone lacks file contents this comparison needs, and gittree doesn't download them:
+       * the files have no line counts, and renames show as a deletion plus an addition.
+       */
+      contentsMissing: z.literal(true).optional(),
     })
     .nullable(),
 });
