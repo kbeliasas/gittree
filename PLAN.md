@@ -135,7 +135,7 @@ Stats:
 
 ```
 Browser · React SPA  (History · Branches · Files · Stats · Settings)
-  │  URL holds all view state · TanStack Query cache · Web Worker: layout, filters, reachability
+  │  URL holds all view state · TanStack Query cache · Web Worker: layout (whole graph, search matches)
   │
   │  HTTP/JSON (+ SSE for fetch progress) · 127.0.0.1 only · session-token cookie
   ▼
@@ -179,7 +179,7 @@ git CLI → .git on disk        ~/.config/gittree (settings, recents)   ~/.cache
 | Graph | `git log --branches --remotes --tags HEAD --date-order --format=%H%x00%P%x00%aN%x00%aE%x00%at%x00%ct%x00%s%x1e` |
 | Refs + upstream state | `git for-each-ref --format=%(refname)%00%(objectname)%00%(*objectname)%00%(upstream)%00%(upstream:track) refs/heads refs/remotes refs/tags` |
 | HEAD, default branch | `git symbolic-ref -q HEAD` · `git rev-parse HEAD` · `git symbolic-ref refs/remotes/origin/HEAD` |
-| Full messages (search) | `git log --format=%H%x00%B%x1e <same revs>`, loaded in the background |
+| Message bodies (search) | `git log --<order>-order --max-count=<limit> --format=%H%x00%b%x00 --stdin` (the snapshot's tips), loaded when the search is first used |
 | Commit details | `git log -1 --date=raw --format=%H%x00%P%x00%aN…%cd%x00%B <sha>` |
 | Changed files | `git diff-tree -r -z -M --raw --numstat <parent> <sha>` (`--root <sha>` for root commits) · sizes from `git cat-file --batch-check` · a partial clone without the contents: `--raw --no-renames` (no counts, no renames) |
 | One file's diff | `git diff-tree -p -U<n> [-w] [-M] <parent> <sha> -- [<old path>] <path>` — whole file as context up to 1 MiB, else `-U3` |
@@ -203,7 +203,7 @@ a repo):
 | `GET /api/repos` · `POST /api/repos {path}` | Recents + scanned repos · validate (`rev-parse --show-toplevel`) and add |
 | `GET /api/repos/:id/graph?order=date\|topo&limit&cursor` | Snapshot id, HEAD, default branch, refs, commits — one page (default 10,000 commits); `page.next` continues it |
 | `GET /api/repos/:id/snapshot` | Current refs snapshot (focus check) |
-| `GET /api/repos/:id/messages` | Full messages for search |
+| `GET /api/repos/:id/messages?order&limit` | Message bodies (after the subject) of the graph's first page, by hash, for search |
 | `GET /api/repos/:id` | HEAD, shallow, commit count, web link for commits (from `origin`'s URL, no API calls) |
 | `GET /api/repos/:id/commits/:sha?parent=1\|2…\|cc` | Full message, author and committer (with time zones), parents, changed files with status, +/−, renames, modes and sizes |
 | `GET /api/repos/:id/diff?sha&parent&path&ws` | Parsed hunks for one file (`path` must be in the commit's file list) |
@@ -276,7 +276,8 @@ cursor from an older snapshot gets `409 snapshot_changed`.
 - **Filter & focus:**
   - *Branch visibility* — pick refs (presets: local only · local + origin · hide tags); visible commits are those
     reachable from the picks; layout reruns in the worker.
-  - *First-parent* — follow first parents from the chosen branch: main as a sequence of merges.
+  - *First-parent* — follow first parents from one branch: the default branch, or the focused one. Main as a
+    sequence of merges, in a single lane.
   - *Topology only* — keep branch tips, tags, merges, fork points and roots; rewrite parents to the nearest kept
     ancestor (like `--simplify-by-decoration`).
   - *Matches: dim or hide* — dim keeps the full graph; hide re-links each match to its nearest matching ancestor
@@ -307,11 +308,26 @@ cursor from an older snapshot gets `409 snapshot_changed`.
 
 ### Search & filter
 
-- One bar with chips. Free text matches subject, body, SHA prefix and ref names. Tokens: `author:` `after:`
-  `before:` `ref:release/*` `jira:SHOP-12` `merges:only|none` `path:` `content:"…"` `regex:/…/`.
-- Instant, in the worker: text, author, dates, refs, Jira, merges. On the server (async, cancellable, cached):
-  `path:`, `content:`, `regex:`.
-- Match count, with n / N to step through matches.
+- One bar with chips: a text field with suggestions while focused (`/`), the terms as removable chips otherwise.
+  Free text matches subject, body, SHA prefix and ref names, ignoring case. Tokens: `author:` `after:` `before:`
+  `ref:release/*` `jira:SHOP-12` `merges:only|none` `path:` `content:"…"` `regex:/…/`; values with spaces in
+  quotes; a leading `-` negates any term (`-author:bob`, `-wip`). Unknown keys are text (`fix:null`).
+- Terms combine with AND; one token repeated means either value (`author:alice author:bob`). `after:` is inclusive,
+  `before:` exclusive, on the author date: `YYYY-MM-DD` (local midnight), `today`, `yesterday` or an age (`3d`,
+  `2w`, `6m`, `1y`). `ref:` matches refs at the commit, `*`/`?` wildcards, `origin/x` also as `x`. `jira:KEY` (or a
+  whole project, `jira:SHOP`) matches keys in the message and in the name of the commit's branch line, so a
+  branch's commits count for its ticket.
+- Suggestions: token names, authors (by commit count), branches and tags, Jira keys, dates. Tab completes, Enter
+  jumps to the first match, Esc closes. A **Tickets** list shows the Jira keys with commit counts and toggles
+  `jira:KEY`.
+- Instant, in the browser (an index built once per graph and message set; a query over 10k commits takes a few
+  ms): text, author, dates, refs, Jira, merges. Message bodies come from `GET /api/repos/:id/messages`, loaded the
+  first time the search is used. On the server (async, cancellable, cached): `path:`, `content:`, `regex:`;
+  `path:` values with `*`, `?` or `[` are git globs (`*` within a folder, `**` across folders), others literal.
+- Matches **dim** the rest, or the rest is **hidden**: the matches are laid out on their own in the worker, each
+  linked to its nearest matching ancestors (first parent along its first-parent chain; side parents that are
+  ancestors of another parent dropped). Search and branch focus beat hover highlighting.
+- Match count, with n / N to step through matches (wrapping).
 
 ### Branches & staleness
 
@@ -452,7 +468,7 @@ and `/auth` proxied) and the server in watch mode; `pnpm build && pnpm link --gl
 | M0 | Skeleton — **done** | CLI → server → browser with token; git runner + allowlist; fixture builder; test setup | S |
 | M1 | Graph — **done** | Paged graph endpoint (newest 10k + "N older not shown" notice), lane-layout worker, virtualized list, ref badges, hover, selection, keyboard, URL state, branch focus (badge click), commit summary panel from graph data | L |
 | M2 | Details & diffs — **done** | Details panel (full message, author/committer, merged commits marked in the graph, contained-in, Jira links from the config file, link to the hosting service), file list per parent or conflict resolutions (`--cc`), diff viewer (split/unified, Shiki, word diff, folding, ignore whitespace, large-diff gate), diff keys | M |
-| M3 | Search & focus | Filter bar + syntax, path/content search, dim/hide, branch visibility, first-parent, topology only | L |
+| M3 | Search & focus — **1 of 3 done** | Filter bar + syntax, path/content search, dim/hide, branch visibility, first-parent, topology only. Lands as three pull requests in sequence: (1) search bar, in-browser filters, dim/hide, suggestions, negation, Jira ticket list — **done**; (2) `path:` / `content:` / `regex:` on the server; (3) branch visibility, first-parent, topology only | L |
 | M4 | Repos & fetch | Settings file, recents + scan roots, Cmd+K, single instance, fetch with progress, refresh banner | M |
 | M5 | Branches | Branches table, staleness rules, ahead/behind, merged/gone, cleanup commands, focus link | M |
 | M6 | File history & blame | File finder, history across renames, blame with age tint, blame-before-change | M |

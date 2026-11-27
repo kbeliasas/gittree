@@ -31,6 +31,7 @@ const SAMPLES: Record<string, (sample: Sample) => string[]> = {
   'GET /api/repos': () => ['/api/repos'],
   'GET /api/repos/:id': ({ repo }) => [`/api/repos/${repo.id}`],
   'GET /api/repos/:id/graph': ({ repo }) => [`/api/repos/${repo.id}/graph`, `/api/repos/${repo.id}/graph?order=topo&limit=3`],
+  'GET /api/repos/:id/messages': ({ repo }) => [`/api/repos/${repo.id}/messages`, `/api/repos/${repo.id}/messages?order=topo&limit=3`],
   'GET /api/repos/:id/commits/:sha': ({ repo, head, merge }) => [
     ...(head ? [`/api/repos/${repo.id}/commits/${head}`] : []),
     ...(merge ? [`/api/repos/${repo.id}/commits/${merge}?parent=2`, `/api/repos/${repo.id}/commits/${merge}?parent=cc`] : []),

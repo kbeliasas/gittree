@@ -157,6 +157,22 @@ export const GraphPayload = z.object({
 });
 export type GraphPayload = z.infer<typeof GraphPayload>;
 
+/** The same walk as the graph's first page: `order` and `limit` pick the same commits. */
+export const MessagesQuery = z.object({
+  order: GraphOrder.default('date'),
+  limit: z.coerce.number().int().min(1).max(GRAPH_MAX_PAGE_SIZE).default(GRAPH_PAGE_SIZE),
+});
+export type MessagesQuery = z.infer<typeof MessagesQuery>;
+
+/** Full commit messages for search (PLAN §8); subjects already come with the graph. */
+export const MessagesPayload = z.object({
+  /** The refs snapshot the walk started from, as in GraphPayload. */
+  snapshot: z.string(),
+  /** Message bodies, everything after the subject, of the commits that have one, by full hash. */
+  bodies: z.record(Sha, z.string()),
+});
+export type MessagesPayload = z.infer<typeof MessagesPayload>;
+
 // ---------------------------------------------------------------------------
 // Commit details and diffs
 

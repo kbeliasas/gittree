@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { DAY, fixtureGit, T0, type FixtureName } from '../../../test/fixtures/build.ts';
 import { HOST, json, makeTestApp, signIn, type TestApp } from '../../../test/helpers/app.ts';
-import type { GraphCommit, GraphPayload } from '../../shared/api.ts';
+import type { GraphCommit, GraphPayload, MessagesPayload } from '../../shared/api.ts';
 
 const fixtures = inject('fixtures');
 const { repos } = fixtures;
@@ -230,5 +230,53 @@ describe('GET /api/repos/:id/graph', () => {
     expect((await request(dir, '?order=sideways')).statusCode).toBe(400);
     const missing = await t.app.inject({ url: '/api/repos/000000000000/graph', headers: { host: HOST, cookie } });
     expect(missing.statusCode).toBe(404);
+  });
+});
+
+describe('GET /api/repos/:id/messages', () => {
+  const messagesRequest = (dir: string, query = '') =>
+    t.app.inject({ url: `/api/repos/${idOf(dir)}/messages${query}`, headers: { host: HOST, cookie } });
+  const messages = async (dir: string, query = '') => {
+    const response = await messagesRequest(dir, query);
+    expect(response.statusCode, response.body).toBe(200);
+    return json<MessagesPayload>(response);
+  };
+
+  it.each(['merges', 'people', 'conflicts'] as const)('%s: the body of every commit that has one, as git log has it', async (name) => {
+    const { dir } = repos[name];
+    const payload = await messages(dir);
+    const expected: Record<string, string> = {};
+    const log = fixtureGit(fixtures, dir, ['log', '--branches', '--remotes', '--tags', 'HEAD', '--format=%H%x00%b%x00']);
+    const tokens = log.split('\0');
+    for (let i = 0; i + 1 < tokens.length; i += 2) {
+      const body = (tokens[i + 1] ?? '').trim();
+      if (body !== '') expected[(tokens[i] ?? '').trim()] = body;
+    }
+    expect(payload.bodies).toEqual(expected);
+    expect(payload.snapshot).toBe((await graph(dir)).snapshot);
+  });
+
+  it('has the bodies, not the subjects', async () => {
+    const { merges, people } = repos;
+    const login = (await graph(merges.dir)).commits.find((c) => c.subject === 'SHOP-12 Login API client');
+    expect((await messages(merges.dir)).bodies[login!.sha]).toBe('Talks to /api/session.');
+    const bodies = (await messages(people.dir)).bodies;
+    expect(bodies[people.shas['keys-in-body']!]).toBe('Refs SHOP-15 and OPS-7.');
+    expect(bodies[people.shas.root!]).toBeUndefined(); // a subject alone
+  });
+
+  it('walks the same commits as the graph page with that order and limit', async () => {
+    const { dir } = repos.people;
+    const page = await graph(dir, '?order=topo&limit=3');
+    const shas = new Set(page.commits.map((c) => c.sha));
+    const { bodies } = await messages(dir, '?order=topo&limit=3');
+    expect(Object.keys(bodies).every((sha) => shas.has(sha))).toBe(true);
+    expect(Object.keys(bodies)).toHaveLength(1); // only keys-in-body has a body among the newest three
+  });
+
+  it('returns no bodies for a repository without commits, and validates its parameters', async () => {
+    expect((await messages(repos.empty.dir)).bodies).toEqual({});
+    expect((await messagesRequest(repos.linear.dir, '?limit=0')).statusCode).toBe(400);
+    expect((await messagesRequest(repos.linear.dir, '?order=sideways')).statusCode).toBe(400);
   });
 });

@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import type { GraphOrder, GraphPayload, GraphRef, HeadInfo } from '../../shared/api.ts';
-import { GRAPH_LOG_FORMAT, parseGraphLog } from '../git/log.ts';
+import type { GraphOrder, GraphPayload, GraphRef, HeadInfo, MessagesPayload } from '../../shared/api.ts';
+import { BODY_LOG_FORMAT, GRAPH_LOG_FORMAT, parseBodyLog, parseGraphLog } from '../git/log.ts';
 import { parseRefs, REF_PATTERNS, REFS_FORMAT, type ParsedRef } from '../git/refs.ts';
 import type { GitRunner } from '../git/runner.ts';
 import { readHead } from '../repos/head.ts';
@@ -157,6 +157,27 @@ export async function readGraph(git: GitRunner, repo: Repo, snapshot: RefsSnapsh
       next: hasMore ? encodeCursor({ snapshot: snapshot.id, order, offset: offset + limit }) : null,
     },
   };
+}
+
+/**
+ * Message bodies for search (PLAN §8), from the same walk as the graph's first
+ * page: the snapshot's commit ids on stdin, the same order and limit.
+ */
+export async function readMessages(
+  git: GitRunner,
+  repo: Repo,
+  snapshot: RefsSnapshot,
+  request: { order: GraphOrder; limit: number; signal?: AbortSignal },
+): Promise<MessagesPayload> {
+  if (snapshot.tips.length === 0) return { snapshot: snapshot.id, bodies: {} };
+  const { order, limit, signal } = request;
+  const log = await git.run('log', {
+    cwd: repo.path,
+    signal,
+    input: `${snapshot.tips.join('\n')}\n`,
+    args: [`--${order}-order`, BODY_LOG_FORMAT, `--max-count=${limit}`, '--stdin'],
+  });
+  return { snapshot: snapshot.id, bodies: Object.fromEntries(parseBodyLog(log.stdout.toString('utf8'))) };
 }
 
 export interface GraphCursor {

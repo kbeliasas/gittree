@@ -5,6 +5,7 @@ import {
   FileDiff,
   GraphPayload,
   HealthResponse,
+  MessagesPayload,
   RepoInfo,
   ReposResponse,
   SettingsResponse,
@@ -42,6 +43,14 @@ export const graphQuery = (repoId: string, order: GraphOrder) =>
   queryOptions({
     queryKey: ['graph', repoId, order],
     queryFn: ({ signal }) => getJson(`/api/repos/${repoId}/graph?order=${order}`, GraphPayload, signal),
+    structuralSharing: false, // large, and replaced wholesale
+  });
+
+/** Message bodies for search; the graph's snapshot in the key refetches them when refs move. */
+export const messagesQuery = (repoId: string, order: GraphOrder, snapshot: string) =>
+  queryOptions({
+    queryKey: ['messages', repoId, order, snapshot],
+    queryFn: ({ signal }) => getJson(`/api/repos/${repoId}/messages?order=${order}`, MessagesPayload, signal),
     structuralSharing: false, // large, and replaced wholesale
   });
 

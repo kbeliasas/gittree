@@ -11,7 +11,7 @@ import type { Lines } from './lines.ts';
  *  - the default branch's first-parent chain stays in lane 0, and nothing else uses lane 0;
  *  - a lane that ends in a commit isn't reused by an edge leaving that same commit.
  */
-export function checkLayout(dag: Dag, lines: Lines, layout: Layout): string[] {
+export function checkLayout(dag: Dag, lines: Pick<Lines, 'mainline' | 'mainlineTip'>, layout: Layout): string[] {
   const problems: string[] = [];
   const { count } = dag;
   const segs = (r: number) => {

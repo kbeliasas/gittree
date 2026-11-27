@@ -4,9 +4,11 @@ import { create } from 'zustand';
 
 import type { GraphOrder } from '../../../shared/api.ts';
 import type { GraphAnalysis } from '../../graph/analyze.ts';
-import { analyzeInWorker } from '../../graph/client.ts';
+import { analyzeInWorker, viewInWorker } from '../../graph/client.ts';
 import type { Layout } from '../../graph/layout.ts';
+import type { Lines } from '../../graph/lines.ts';
 import { toGraphInput, toModel, type GraphModel } from '../../graph/model.ts';
+import { fullView, type GraphView } from '../../graph/view.ts';
 import { graphQuery } from '../../lib/queries.ts';
 
 export interface LoadedGraph {
@@ -35,12 +37,75 @@ export function useGraph(repoId: string, order: GraphOrder) {
   };
 }
 
+/** What the commit list shows: the whole graph, or only some commits laid out on their own. */
+export interface ShownGraph {
+  view: GraphView;
+  /** The graph's lines with the view's owners and lane 0. */
+  lines: Lines;
+}
+
+/**
+ * The commits to show: all of them (`keep` null), or the kept ones, laid out in
+ * the worker. While a new view is computed, the previous one for the same graph
+ * stays on screen.
+ */
+export function useShownGraph(graph: LoadedGraph, keep: Uint8Array | null): ShownGraph & { switching: boolean } {
+  const { model, analysis } = graph;
+  const full = useMemo(
+    (): ShownGraph => ({ view: fullView(model, analysis.lines, analysis.layout), lines: analysis.lines }),
+    [model, analysis],
+  );
+  const kept = useQuery({
+    queryKey: ['graph-view', model.payload.snapshot, model.payload.order, keep ? maskKey(keep) : null],
+    queryFn: async () => {
+      const view = await viewInWorker(model, analysis.lines, keep!);
+      return { graph, shown: { view, lines: { ...analysis.lines, ...view.lines } } satisfies ShownGraph };
+    },
+    enabled: keep !== null,
+    placeholderData: keepPreviousData,
+    structuralSharing: false,
+    gcTime: 60_000,
+  });
+  if (keep === null) return { ...full, switching: false };
+  // A view computed for another graph (the order changed meanwhile) would point at the wrong rows.
+  if (!kept.data || kept.data.graph !== graph) return { ...full, switching: true };
+  return { ...kept.data.shown, switching: kept.isPlaceholderData };
+}
+
+/** A 64-bit hash of a 0/1 mask, for query keys. */
+function maskKey(mask: Uint8Array): string {
+  let a = 0x811c9dc5;
+  let b = 0x01000193;
+  for (let i = 0; i < mask.length; i++) {
+    a = Math.imul(a ^ mask[i]!, 0x01000193);
+    b = Math.imul(b ^ (mask[i]! + i), 0x5bd1e995);
+  }
+  return `${mask.length}:${(a >>> 0).toString(36)}${(b >>> 0).toString(36)}`;
+}
+
+/** A mask over graph rows as a mask over the view's rows. */
+export function maskInView(mask: Uint8Array, view: GraphView): Uint8Array {
+  if (view.rows.length === mask.length) return mask;
+  const result = new Uint8Array(view.rows.length);
+  for (let v = 0; v < view.rows.length; v++) result[v] = mask[view.rows[v]!]!;
+  return result;
+}
+
+/** An emphasis over graph rows as one over the view's rows; a line stays a line. */
+export function emphasisInView(emphasis: Emphasis, view: GraphView): Emphasis {
+  if (emphasis.kind === 'line' || view.rows.length === view.viewOf.length) return emphasis;
+  const marks = new Map<number, 'fork' | 'merge'>();
+  for (const [row, mark] of emphasis.marks) if (view.viewOf[row]! >= 0) marks.set(view.viewOf[row]!, mark);
+  return { kind: 'rows', rows: maskInView(emphasis.rows, view), marks };
+}
+
 /** Pointer hover over the commit list: changes too often to live in the URL. */
 interface HoverState {
+  /** The hovered row of the commit list (a view row). */
   row: number | null;
   /** Alt (Option) is held: highlight all ancestors instead of the branch line. */
   alt: boolean;
-  /** Something in the details panel is hovered that lights up commits, e.g. a merge's merged commits. */
+  /** Something in the details panel is hovered that lights up commits, e.g. a merge's merged commits (graph rows). */
   panel: Emphasis | null;
   setRow(row: number | null, alt?: boolean): void;
   setAlt(alt: boolean): void;
