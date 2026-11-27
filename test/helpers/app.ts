@@ -1,4 +1,5 @@
 import type { LightMyRequestResponse } from 'fastify';
+import { join } from 'node:path';
 
 import { createApp, type App } from '../../src/server/app.ts';
 import { GitRunner } from '../../src/server/git/runner.ts';
@@ -19,7 +20,7 @@ export interface TestApp {
 
 export async function makeTestApp(
   repoDirs: readonly string[],
-  options: { webRoot?: string | null; extraOrigins?: string[] } = {},
+  options: { webRoot?: string | null; extraOrigins?: string[]; configDir?: string } = {},
 ): Promise<TestApp> {
   const git = new GitRunner();
   const registry = new RepoRegistry();
@@ -31,6 +32,8 @@ export async function makeTestApp(
     gitVersion: '2.99.0',
     registry,
     session,
+    // Never the user's own settings: a folder that doesn't exist unless a test passes one.
+    configDir: options.configDir ?? join(repoDirs[0] ?? '/nonexistent', '.no-gittree-config'),
     webRoot: options.webRoot ?? null,
     port: TEST_PORT,
     extraOrigins: options.extraOrigins,

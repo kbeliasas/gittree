@@ -43,3 +43,31 @@ export function shortSha(sha: string): string {
 export function plural(count: number, one: string, many = `${one}s`): string {
   return `${numberFormat.format(count)} ${count === 1 ? one : many}`;
 }
+
+/** A span of time in words: "45 minutes", "3 days", "2 months". */
+export function duration(seconds: number): string {
+  const s = Math.max(0, seconds);
+  if (s < HOUR) return plural(Math.max(1, Math.round(s / MINUTE)), 'minute');
+  if (s < DAY) return plural(Math.round(s / HOUR), 'hour');
+  if (s < MONTH) return plural(Math.round(s / DAY), 'day');
+  if (s < YEAR) return plural(Math.round(s / MONTH), 'month');
+  return plural(Math.round((s / YEAR) * 10) / 10, 'year');
+}
+
+const sizeFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+
+/** "512 B", "2.1 KB", "3.4 MB". */
+export function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${sizeFormat.format(bytes / 1024)} KB`;
+  return `${sizeFormat.format(bytes / 1024 / 1024)} MB`;
+}
+
+/** The time as its author saw it: "2025-01-07 11:00 +02:00" (`tz` in minutes east of UTC). */
+export function zonedTime(seconds: number, tz: number): string {
+  const shifted = new Date((seconds + tz * 60) * 1000).toISOString(); // the wall-clock time, labelled UTC
+  const sign = tz < 0 ? '-' : '+';
+  const abs = Math.abs(tz);
+  const offset = `${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+  return `${shifted.slice(0, 10)} ${shifted.slice(11, 16)} ${offset}`;
+}

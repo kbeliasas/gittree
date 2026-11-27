@@ -176,6 +176,13 @@ describe('GitRunner with real git', () => {
     expect(sha.trim()).toBe(files.shas.root);
   });
 
+  it('passes paths literally: no globs, no pathspec magic', async () => {
+    const log = (path: string) => git.text('log', { cwd: files.dir, args: ['--format=%H'], paths: [path] });
+    expect(await log('src/*.ts')).toBe('');
+    expect(await log(':(glob)**/*.ts')).toBe('');
+    expect((await log('src/api/login.ts')).trim().split('\n')).toHaveLength(2);
+  });
+
   it('prints paths as UTF-8 regardless of the user config', async () => {
     const names = await git.text('ls-tree', { cwd: files.dir, args: ['-r', '--name-only', 'HEAD'] });
     expect(names.split('\n')).toEqual(expect.arrayContaining(['docs/naïve café.md', 'src/日本語/ファイル.ts']));
@@ -245,6 +252,7 @@ describe('GitRunner process handling', () => {
         'GIT_CONFIG_GLOBAL=/home/me/.gitconfig-work',
         'GIT_OPTIONAL_LOCKS=0',
         'GIT_TERMINAL_PROMPT=0',
+        'GIT_LITERAL_PATHSPECS=1',
         'LC_ALL=C',
         'PAGER=cat',
       ]),

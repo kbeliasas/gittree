@@ -1,6 +1,16 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query';
 
-import { GraphPayload, HealthResponse, RepoInfo, ReposResponse, type GraphOrder } from '../../shared/api.ts';
+import {
+  CommitDetails,
+  FileDiff,
+  GraphPayload,
+  HealthResponse,
+  RepoInfo,
+  ReposResponse,
+  SettingsResponse,
+  type CompareWith,
+  type GraphOrder,
+} from '../../shared/api.ts';
 import { ApiError, getJson, SignedOutError } from './api.ts';
 
 export const queryClient = new QueryClient({
@@ -33,4 +43,25 @@ export const graphQuery = (repoId: string, order: GraphOrder) =>
     queryKey: ['graph', repoId, order],
     queryFn: ({ signal }) => getJson(`/api/repos/${repoId}/graph?order=${order}`, GraphPayload, signal),
     structuralSharing: false, // large, and replaced wholesale
+  });
+
+/** Read from the config file on every request, so a page reload picks up hand edits (M4 adds the Settings view). */
+export const settingsQuery = () =>
+  queryOptions({ queryKey: ['settings'], queryFn: ({ signal }) => getJson('/api/settings', SettingsResponse, signal) });
+
+/** Commits never change, so details and diffs stay cached for the session. */
+export const commitQuery = (repoId: string, sha: string, compare: CompareWith) =>
+  queryOptions({
+    queryKey: ['commit', repoId, sha, String(compare)],
+    queryFn: ({ signal }) => getJson(`/api/repos/${repoId}/commits/${sha}?parent=${compare}`, CommitDetails, signal),
+  });
+
+export const diffQuery = (repoId: string, sha: string, compare: CompareWith, path: string, ignoreWhitespace: boolean) =>
+  queryOptions({
+    queryKey: ['diff', repoId, sha, String(compare), path, ignoreWhitespace],
+    queryFn: ({ signal }) => {
+      const query = new URLSearchParams({ sha, parent: String(compare), path, ws: ignoreWhitespace ? '1' : '0' });
+      return getJson(`/api/repos/${repoId}/diff?${query}`, FileDiff, signal);
+    },
+    structuralSharing: false, // can be large, and replaced wholesale
   });

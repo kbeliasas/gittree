@@ -14,7 +14,7 @@ let historyUrl: string;
 
 const row = (sha: string): Locator => page.locator(`[role=option][data-sha="${sha}"]`);
 const rowNamed = (subject: string): Locator => page.locator('[role=option]').filter({ hasText: subject });
-const panelTitle = () => page.getByRole('complementary', { name: 'Selected commit' }).getByRole('heading');
+const panelTitle = () => page.getByRole('complementary', { name: 'Selected commit' }).getByRole('heading', { level: 2 });
 const selectedSha = () => new URL(page.url()).searchParams.get('sel');
 
 test.beforeAll(async ({ browser }) => {

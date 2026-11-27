@@ -18,7 +18,19 @@ import type { FixtureName } from '../fixtures/build.ts';
 const fixtures = inject('fixtures');
 const git = new GitRunner();
 
-const NAMES: FixtureName[] = ['linear', 'merges', 'multiRoot', 'files', 'people', 'branches', 'detached', 'shallow', 'worktreeLinked', 'submodule'];
+const NAMES: FixtureName[] = [
+  'linear',
+  'merges',
+  'multiRoot',
+  'files',
+  'people',
+  'branches',
+  'detached',
+  'shallow',
+  'worktreeLinked',
+  'submodule',
+  'conflicts',
+];
 
 async function load(name: FixtureName, order: GraphOrder, limit = GRAPH_PAGE_SIZE): Promise<GraphModel> {
   const repo = await resolveRepo(git, fixtures.repos[name].dir);

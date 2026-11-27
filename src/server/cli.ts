@@ -12,6 +12,7 @@ import { openBrowser } from './open-browser.ts';
 import { RepoRegistry } from './repos/registry.ts';
 import { RepoError, resolveRepo } from './repos/repo.ts';
 import { Session } from './security/session.ts';
+import { defaultConfigDir } from './settings/settings.ts';
 import { startServer } from './start.ts';
 import { VERSION } from './version.ts';
 
@@ -83,6 +84,7 @@ async function main(argv: string[]): Promise<number | undefined> {
       gitVersion,
       registry,
       session: new Session(),
+      configDir: defaultConfigDir(),
       webRoot,
       listenPort,
       logRequests: values.verbose,

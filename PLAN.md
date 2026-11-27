@@ -154,7 +154,8 @@ git CLI → .git on disk        ~/.config/gittree (settings, recents)   ~/.cache
   `rev-parse`, `rev-list`, `for-each-ref`, `ls-tree`, `cat-file`, `blame`, `cherry`, `symbolic-ref`,
   `config --get`, plus `fetch`). Arguments are arrays, never a shell string; user input (refs, paths, patterns)
   goes after `--end-of-options` or `--`. Environment: `GIT_OPTIONAL_LOCKS=0` (never takes `index.lock` while your
-  IDE works), `GIT_TERMINAL_PROMPT=0`, `LC_ALL=C`, `core.quotepath=off`.
+  IDE works), `GIT_TERMINAL_PROMPT=0`, `GIT_LITERAL_PATHSPECS=1` (file names with `*`, `[` or a leading `:` stay
+  literal), `LC_ALL=C`, `core.quotepath=off`. Diffs run with `--no-ext-diff --no-textconv`.
 - **Localhost safety.** Bind 127.0.0.1 on a random free port. The CLI opens a URL with a one-time token that the
   server swaps for an HttpOnly, SameSite=Strict cookie; every request needs it, the Host header must be
   `127.0.0.1:<port>` or `localhost:<port>` (blocks DNS rebinding), and there is no CORS. Without this, any web page
@@ -177,8 +178,10 @@ git CLI → .git on disk        ~/.config/gittree (settings, recents)   ~/.cache
 | Refs + upstream state | `git for-each-ref --format=%(refname)%00%(objectname)%00%(*objectname)%00%(upstream)%00%(upstream:track) refs/heads refs/remotes refs/tags` |
 | HEAD, default branch | `git symbolic-ref -q HEAD` · `git rev-parse HEAD` · `git symbolic-ref refs/remotes/origin/HEAD` |
 | Full messages (search) | `git log --format=%H%x00%B%x1e <same revs>`, loaded in the background |
-| Changed files | `git diff-tree -r -z -M --numstat <parent> <sha>` (`--root <sha>` for root commits) |
-| One file's diff | `git diff -M -U3 [-w] <parent> <sha> -- <path>` |
+| Commit details | `git log -1 --date=raw --format=%H%x00%P%x00%aN…%cd%x00%B <sha>` |
+| Changed files | `git diff-tree -r -z -M --raw --numstat <parent> <sha>` (`--root <sha>` for root commits) · sizes from `git cat-file --batch-check` |
+| One file's diff | `git diff-tree -p -U<n> [-w] [-M] <parent> <sha> -- [<old path>] <path>` — whole file as context up to 1 MiB, else `-U3` |
+| Conflict resolutions | `git diff-tree -r -z --cc --raw -p <merge>` — files without a `--cc` hunk (clean 3-way merges) are left out |
 | Path / content search | `git log --format=%H <revs> -- <path>` · `git log -S<text>` / `-G<regex>` |
 | Files at a commit | `git ls-tree -r -z --name-only <sha>` |
 | File history | `git log --follow --name-status --format=… <sha> -- <path>` |
@@ -199,13 +202,14 @@ a repo):
 | `GET /api/repos/:id/graph?order=date\|topo&limit&cursor` | Snapshot id, HEAD, default branch, refs, commits — one page (default 10,000 commits); `page.next` continues it |
 | `GET /api/repos/:id/snapshot` | Current refs snapshot (focus check) |
 | `GET /api/repos/:id/messages` | Full messages for search |
-| `GET /api/repos/:id/commits/:sha?parent=1` | Committer, dates, changed files with +/−, renames |
-| `GET /api/repos/:id/diff?sha&parent&path&ws` | Parsed hunks for one file |
+| `GET /api/repos/:id` | HEAD, shallow, commit count, web link for commits (from `origin`'s URL, no API calls) |
+| `GET /api/repos/:id/commits/:sha?parent=1\|2…\|cc` | Full message, author and committer (with time zones), parents, changed files with status, +/−, renames, modes and sizes |
+| `GET /api/repos/:id/diff?sha&parent&path&ws` | Parsed hunks for one file (`path` must be in the commit's file list) |
 | `GET /api/repos/:id/search?path=\|content=\|regex=` | Matching SHAs (streamed; cancelled when the client disconnects) |
 | `GET /api/repos/:id/tree?at` · `file-history?path&at` · `blame?path&at&ws&moves` | File list · commits + rename points · line ranges → commit |
 | `GET /api/repos/:id/stats?ref&since&until` | The four stats datasets |
 | `POST /api/repos/:id/fetch` | SSE progress, then the result |
-| `GET` / `PUT /api/settings` | Scan roots, Jira, thresholds, excluded paths |
+| `GET` / `PUT /api/settings` | Scan roots, Jira, thresholds, excluded paths (M2: `GET` only, Jira only) |
 
 Graph payload:
 
@@ -260,7 +264,9 @@ cursor from an older snapshot gets `409 snapshot_changed`.
   a rounded corner.
 - **Keyboard:** ↑/↓ or j/k move (PageUp/PageDown, Home/End jump), `[` / `]` parent / child along the line, Enter
   opens the first file's diff, `/` search, Cmd+K palette, Cmd+P file finder, Esc clears focus. Clicks and
-  parent/child jumps add a Back entry; stepping with the keys replaces it.
+  parent/child jumps add a Back entry; stepping with the keys replaces it. With a diff open: j/k next / previous
+  file, `[` / `]` still move between commits (same file when that commit changed it, else its first file), the
+  arrow keys scroll the diff unless the commit list has the focus, Esc closes the diff.
 - **Where it runs:** lane layout and branch lines in the worker; hover, Alt+hover and focus reachability on the main
   thread (well under a millisecond for 10k commits, and it has to keep up with the pointer).
 - **The URL holds the state** (repo, view, selection, filters): links are bookmarkable and browser Back/Forward
@@ -282,11 +288,20 @@ cursor from an older snapshot gets `409 snapshot_changed`.
 
 - Full message; author and committer shown separately when they differ (rebases, cherry-picks); absolute and
   relative dates; parents and children as links; branches and tags that contain the commit.
-- Merge commits: diff against the first parent by default ("what this merge brought in"), switchable per parent;
-  list of merged commits (`M^1..M^2`) and how long that branch lived.
-- Files: status (added, modified, deleted, renamed with similarity), +/−, grouped by folder; binary and very large
-  diffs collapsed behind "load anyway".
-- Diff viewer: split or unified (remembered), syntax highlighting, ignore-whitespace toggle, expandable context.
+- Merge commits: diff against the first parent by default ("what this merge brought in"), switchable per parent or
+  to the merge's **conflict resolutions** (`--cc`: only hunks that differ from every parent); merged commits
+  (`M^1..M^2`, every extra parent for octopus merges) with how long that branch lived. Selecting a merge marks its
+  merged commits at the row's edge without dimming anything; hovering "Merged …" in the panel dims the rest.
+- Files: status (added, modified, deleted, renamed with similarity), +/−, grouped by folder; binary files say so
+  (with sizes); diffs with more than 2,000 changed lines wait for "Load diff".
+- Diff viewer (gittree's own, not a library): split or unified (remembered; split from 1280 px), Shiki
+  highlighting in a worker with the JavaScript regex engine (no WebAssembly, so the CSP stays strict), word-level
+  changes within paired lines, ignore-whitespace toggle (in the URL), virtualized rows with wrapped lines. Files up
+  to 1 MiB arrive with the whole file as context: unchanged runs fold around each change and unfold 20 lines at a
+  time or all at once without another request, and highlighting sees the whole file. Larger files get `-U3`.
+- The URL holds the open diff: `file`, `parent` (`2`…, `cc`) and `ws`; Back/Forward retrace diffs too.
+- "GitHub ↗" (GitLab, Bitbucket incl. Server, Azure DevOps, Codeberg/Gitea, SourceHut) links the commit to its page,
+  built from `origin`'s URL (or `upstream`, or the first remote); local remotes and unknown hosts get no link.
 
 ### Search & filter
 
@@ -343,6 +358,9 @@ Scope controls: branch (the default branch, or all refs), date range, excluded p
 - Known project keys avoid false positives like `UTF-8`, `SHA-256`, `ISO-8601`; with none configured, a generic
   pattern with a deny-list is used.
 - No Jira API calls in v1 (no tokens needed); issue titles and status could come later.
+- Until the Settings view (M4), `jira.baseUrl` and `jira.projectKeys` are edited by hand in
+  `~/.config/gittree/config.json` (`$XDG_CONFIG_HOME/gittree` when set), read on every request; invalid values are
+  skipped and reported. Keys are detected without it, and link once a base URL is set.
 
 ### Repos, settings, fetch
 
@@ -370,7 +388,7 @@ Scope controls: branch (the default branch, or all refs), date range, excluded p
 | Lists | TanStack Virtual | Smooth 10k-row lists |
 | Off the main thread | Web Worker + Comlink | Layout, filtering, reachability |
 | UI | Tailwind CSS, Radix primitives, cmdk | Accessible menus and popovers; command palette |
-| Diffs & code | `@git-diff-view/react` + Shiki (short spike first; fallback `react-diff-view`) | Split/unified, virtualized, highlighted |
+| Diffs & code | Own renderer on TanStack Virtual + Shiki (JavaScript regex engine, in a worker) | Chosen at M2 over `@git-diff-view/react` (0.1.x, own CSS, Shiki 3 adapter, no clear virtualization) and `react-diff-view` (no virtualization): full-context diffs give exact highlighting and free context expansion |
 | Charts | Apache ECharts | Calendar heatmap, punch card, treemap and stacked area in one library, canvas-fast |
 | Tests | Vitest, Playwright | One runner for server and web; real-browser E2E |
 | Packaging | Vite (web) + tsdown (server) → `dist/`; `pnpm link --global` gives a global `gittree` | tsdown replaces the original pick, tsup, which is no longer maintained |
@@ -410,7 +428,9 @@ and `/auth` proxied) and the server in watch mode; `pnpm build && pnpm link --gl
   criss-cross and octopus merges; multiple roots; renames and moves; binary files; Unicode and spaces in paths;
   annotated and lightweight tags; detached HEAD; empty repo; shallow clone; worktree; submodule; old branches for
   staleness; an upstream-gone branch (via a local bare remote); `.mailmap` duplicates; Jira-like keys including a
-  `UTF-8` false positive.
+  `UTF-8` false positive; a merge with a resolved conflict, an edit only the merge made and a clean 3-way merge,
+  plus a whitespace-only commit and a GitHub-style `origin` URL (`conflicts`). The fixture root also holds a gittree
+  config (Jira base URL and keys) that E2E runs and previews use instead of yours.
 - **Unit:** parsers; lane-layout invariants (one commit per cell, edges only between adjacent rows, main stays in
   lane 0) plus a snapshot per fixture; parent rewriting for focus modes; query parser; Jira matcher; stats
   aggregations.
@@ -427,7 +447,7 @@ and `/auth` proxied) and the server in watch mode; `pnpm build && pnpm link --gl
 |---|---|---|---|
 | M0 | Skeleton — **done** | CLI → server → browser with token; git runner + allowlist; fixture builder; test setup | S |
 | M1 | Graph — **done** | Paged graph endpoint (newest 10k + "N older not shown" notice), lane-layout worker, virtualized list, ref badges, hover, selection, keyboard, URL state, branch focus (badge click), commit summary panel from graph data | L |
-| M2 | Details & diffs | Details panel (merged commits, contained-in, Jira links), file list, diff viewer | M |
+| M2 | Details & diffs — **done** | Details panel (full message, author/committer, merged commits marked in the graph, contained-in, Jira links from the config file, link to the hosting service), file list per parent or conflict resolutions (`--cc`), diff viewer (split/unified, Shiki, word diff, folding, ignore whitespace, large-diff gate), diff keys | M |
 | M3 | Search & focus | Filter bar + syntax, path/content search, dim/hide, branch visibility, first-parent, topology only | L |
 | M4 | Repos & fetch | Settings file, recents + scan roots, Cmd+K, single instance, fetch with progress, refresh banner | M |
 | M5 | Branches | Branches table, staleness rules, ahead/behind, merged/gone, cleanup commands, focus link | M |

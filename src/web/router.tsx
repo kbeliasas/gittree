@@ -1,35 +1,13 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { createRootRouteWithContext, createRoute, createRouter, Outlet, redirect } from '@tanstack/react-router';
 
-import { GraphOrder } from '../shared/api.ts';
 import { Centered, ErrorScreen } from './components/Screens.tsx';
 import { HistoryView } from './features/history/HistoryView.tsx';
 import { RepoLayout } from './features/repo/RepoLayout.tsx';
 import { healthQuery, queryClient, repoInfoQuery, reposQuery } from './lib/queries.ts';
+import { parseSearch, stringifySearch, validateHistorySearch } from './lib/search.ts';
 
-/**
- * PLAN §7: the URL holds the view state — repository, view, selected commit,
- * graph order, focused branch — so links are bookmarkable and Back/Forward
- * retrace your exploration.
- */
-export interface HistorySearch {
-  /** Selected commit (full or abbreviated hash); HEAD when absent. */
-  sel?: string;
-  /** Graph order; date order when absent. */
-  order?: GraphOrder;
-  /** Focused branch name. */
-  focus?: string;
-}
-
-const HASH = /^[0-9a-f]{4,64}$/;
-
-export function validateHistorySearch(search: Record<string, unknown>): HistorySearch {
-  const result: HistorySearch = {};
-  if (typeof search.sel === 'string' && HASH.test(search.sel)) result.sel = search.sel;
-  if (search.order === 'topo') result.order = 'topo';
-  if (typeof search.focus === 'string' && search.focus !== '' && search.focus.length <= 255) result.focus = search.focus;
-  return result;
-}
+export type { HistorySearch } from './lib/search.ts';
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: Outlet,
@@ -80,16 +58,8 @@ const routeTree = rootRoute.addChildren([indexRoute, repoRoute.addChildren([repo
 export const router = createRouter({
   routeTree,
   context: { queryClient },
-  // Plain key=value search params: TanStack's JSON default would turn an all-digit hash into a number.
-  parseSearch: (text) => Object.fromEntries(new URLSearchParams(text)),
-  stringifySearch: (search) => {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(search)) {
-      if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
-    }
-    const text = params.toString();
-    return text === '' ? '' : `?${text}`;
-  },
+  parseSearch,
+  stringifySearch,
   defaultPreload: false,
 });
 

@@ -165,4 +165,20 @@ describe('fixture scenarios', () => {
     expect(git('submodule', 'config', '--file', '.gitmodules', '--get', 'submodule.vendor/linear.url')).toBe('../linear');
     expect(existsSync(join(repos.submodule.dir, 'vendor', 'linear', 'README.md'))).toBe(true);
   });
+
+  it('conflicts: a resolved conflict, an edit only the merge made, a clean 3-way merge, a whitespace-only commit', () => {
+    const { shas } = repos.conflicts;
+    const merge = shas['conflict-merge']!;
+    expect(git('conflicts', 'rev-list', '--parents', '-n1', merge).split(' ')).toEqual([merge, shas['main-side'], shas['feature-tip']]);
+    // Every file differs from both parents, but only two hunks are the merge's own work.
+    expect(lines(git('conflicts', 'diff-tree', '-r', '--cc', '--name-only', '--no-commit-id', '-c', merge))).toEqual([
+      'NOTES.md',
+      'src/limits.ts',
+      'src/retry.ts',
+    ]);
+    expect(git('conflicts', 'diff-tree', '-r', '--cc', '-p', '--no-commit-id', merge)).not.toContain('limits.ts');
+    expect(git('conflicts', 'show', 'HEAD:src/retry.ts')).toContain('attempts: 4,');
+    expect(git('conflicts', 'diff', '-w', '--stat', 'HEAD~1', 'HEAD')).toBe('');
+    expect(git('conflicts', 'config', '--get', 'remote.origin.url')).toBe('https://github.com/example/shop.git');
+  });
 });

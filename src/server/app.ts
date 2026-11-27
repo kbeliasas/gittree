@@ -14,9 +14,11 @@ import type { GitRunner } from './git/runner.ts';
 import { consoleLogger, redactToken } from './logger.ts';
 import type { RepoRegistry } from './repos/registry.ts';
 import { authRoutes } from './routes/auth.ts';
+import { commitRoutes } from './routes/commits.ts';
 import { graphRoutes } from './routes/graph.ts';
 import { healthRoutes } from './routes/health.ts';
 import { repoRoutes } from './routes/repos.ts';
+import { settingsRoutes } from './routes/settings.ts';
 import { installGuard } from './security/guard.ts';
 import type { Session } from './security/session.ts';
 import { registerWeb } from './web.ts';
@@ -35,6 +37,8 @@ export interface AppOptions {
   gitVersion: string;
   registry: RepoRegistry;
   session: Session;
+  /** gittree's settings folder (holds config.json); see defaultConfigDir(). */
+  configDir: string;
   /** Folder with the built web app (index.html + assets); null serves an explanatory page instead. */
   webRoot: string | null;
   /** Port clients use, for the Host check. Defaults to the listening port; inject()-based tests set it. */
@@ -85,6 +89,8 @@ export async function createApp(options: AppOptions): Promise<App> {
   healthRoutes(app, { gitVersion: options.gitVersion });
   repoRoutes(app, { git: options.git, registry: options.registry });
   graphRoutes(app, { git: options.git, registry: options.registry });
+  commitRoutes(app, { git: options.git, registry: options.registry });
+  settingsRoutes(app, { configDir: options.configDir });
   await registerWeb(fastify, { webRoot: options.webRoot });
 
   return app;

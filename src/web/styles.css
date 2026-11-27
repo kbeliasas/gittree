@@ -41,3 +41,14 @@
     @apply bg-[var(--page-bg)] text-zinc-900 antialiased dark:text-zinc-100;
   }
 }
+
+/* Syntax colors from the highlighter worker: each token carries its light and dark color. */
+.tok {
+  color: var(--tl);
+}
+
+@media (prefers-color-scheme: dark) {
+  .tok {
+    color: var(--td);
+  }
+}

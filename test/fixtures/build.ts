@@ -44,6 +44,7 @@ export const FIXTURE_NAMES = [
   'worktree', // main checkout of a repo with a linked worktree
   'worktreeLinked', // the linked worktree
   'submodule', // superproject with `linear` as a submodule
+  'conflicts', // a merge with a resolved conflict and an extra edit; a GitHub-style origin URL
 ] as const;
 export type FixtureName = (typeof FIXTURE_NAMES)[number];
 
@@ -81,6 +82,10 @@ const GLOBAL_CONFIG = `[user]
 [maintenance]
 \tauto = false
 `;
+
+/** gittree's own settings for E2E runs and previews (`XDG_CONFIG_HOME` = FIXTURE_CONFIG_HOME under the fixtures root). */
+export const FIXTURE_CONFIG_HOME = join('.home', '.config');
+export const FIXTURE_JIRA = { baseUrl: 'https://jira.example.com', projectKeys: ['SHOP', 'OPS'] };
 
 /** Environment that runs git exactly as the builder did: no user or system config. */
 export function fixtureGitEnv(root: string): NodeJS.ProcessEnv {
@@ -129,6 +134,8 @@ export function buildFixtures(rootDir: string): Fixtures {
   const env = fixtureGitEnv(root);
   mkdirSync(join(root, '.home'), { recursive: true });
   writeFileSync(join(root, '.home', '.gitconfig'), GLOBAL_CONFIG);
+  mkdirSync(join(root, FIXTURE_CONFIG_HOME, 'gittree'), { recursive: true });
+  writeFileSync(join(root, FIXTURE_CONFIG_HOME, 'gittree', 'config.json'), `${JSON.stringify({ jira: FIXTURE_JIRA }, null, 2)}\n`);
   const ctx: Context = { root, env };
 
   const linear = buildLinear(ctx);
@@ -153,6 +160,7 @@ export function buildFixtures(rootDir: string): Fixtures {
       worktree: worktree.main.result(),
       worktreeLinked: worktree.linked.result(),
       submodule: buildSubmodule(ctx).result(),
+      conflicts: buildConflicts(ctx).result(),
     },
   };
 }
@@ -480,6 +488,53 @@ function buildSubmodule(ctx: Context): RepoBuilder {
   return r;
 }
 
+/**
+ * Both sides change `attempts` in retry.ts (a conflict, resolved to a value
+ * neither side had); main also changes `delayMs`, which merges cleanly. Each
+ * side changes a different line of limits.ts (a clean 3-way merge), and the
+ * merge edits NOTES.md, which neither side touched (an "evil merge"). The last
+ * commit only changes indentation.
+ */
+function buildConflicts(ctx: Context): RepoBuilder {
+  const r = init(ctx, 'conflicts');
+  // Only ever read for the "view on GitHub" link; nothing is fetched from it.
+  r.git(['remote', 'add', 'origin', 'https://github.com/example/shop.git']);
+  r.commit('Add retry settings', {
+    by: 'alice',
+    at: T0,
+    label: 'root',
+    files: { 'src/retry.ts': retryModule(3, 100), 'src/limits.ts': limitsModule(10, 20), 'NOTES.md': '# Notes\n' },
+  });
+  r.branch('feature/SHOP-31-retries');
+  r.commit('SHOP-31 Retry five times', {
+    by: 'bob',
+    at: T0 + DAY,
+    label: 'feature-tip',
+    files: { 'src/retry.ts': retryModule(5, 100), 'src/limits.ts': limitsModule(10, 40) },
+  });
+  r.switch('main');
+  r.commit('Retry once, back off longer', {
+    by: 'carol',
+    at: T0 + DAY + 2 * HOUR,
+    label: 'main-side',
+    files: { 'src/retry.ts': retryModule(1, 500), 'src/limits.ts': limitsModule(15, 20) },
+  });
+  r.mergeResolving(['feature/SHOP-31-retries'], "Merge branch 'feature/SHOP-31-retries'", {
+    by: 'alice',
+    at: T0 + 2 * DAY,
+    label: 'conflict-merge',
+    files: { 'src/retry.ts': retryModule(4, 500), 'NOTES.md': '# Notes\n\nRetries settled at 4.\n' },
+  });
+  // Whitespace only: the merged limits (main's rate, the feature's burst), indented by four.
+  r.commit('Indent limits by four spaces', {
+    by: 'zoe',
+    at: T0 + 3 * DAY,
+    label: 'head',
+    files: { 'src/limits.ts': limitsModule(15, 40).replace(/^ {2}/gm, '    ') },
+  });
+  return r;
+}
+
 // ---------------------------------------------------------------------------
 // Builder
 
@@ -544,6 +599,24 @@ class RepoBuilder {
     const args = ['merge', '-q', '--no-ff', '--no-edit', '-m', message];
     if (options.allowUnrelated) args.push('--allow-unrelated-histories');
     this.git([...args, ...revs], { ...identity('AUTHOR', options.by, options.at), ...identity('COMMITTER', options.by, options.at) });
+    this.#label(options.label);
+  }
+
+  /** Merges with --no-commit, lets conflicts happen, writes the resolution and commits the merge. */
+  mergeResolving(
+    revs: readonly string[],
+    message: string,
+    options: { by: Person; at: number; label?: string; files: Record<string, FileContent> },
+  ): void {
+    const env = { ...identity('AUTHOR', options.by, options.at), ...identity('COMMITTER', options.by, options.at) };
+    try {
+      this.git(['merge', '-q', '--no-ff', '--no-commit', ...revs], env);
+    } catch {
+      // exit 1: conflicts, which the files below resolve
+    }
+    this.#write(options.files);
+    this.git(['add', '-A']);
+    this.git(['commit', '-q', '--no-edit', '-m', message], env);
     this.#label(options.label);
   }
 
@@ -665,6 +738,33 @@ function authModule(version: number): string {
   ];
   if (version >= 3) lines.push('', 'export const REFRESH_WINDOW_MS = 60_000;');
   return `${lines.join('\n')}\n`;
+}
+
+function retryModule(attempts: number, delayMs: number): string {
+  return [
+    'export const RETRY = {',
+    `  attempts: ${attempts},`,
+    '  // Delay before the first retry; doubles after each attempt.',
+    '  // Kept short so tests stay fast.',
+    '  // Raise it for slow networks.',
+    `  delayMs: ${delayMs},`,
+    '};',
+    '',
+  ].join('\n');
+}
+
+function limitsModule(perSecond: number, burst: number): string {
+  return [
+    'export const LIMITS = {',
+    `  perSecond: ${perSecond},`,
+    '  // Requests above the rate are queued,',
+    '  // up to the burst size; the rest fail.',
+    '  queue: true,',
+    '  log: false,',
+    `  burst: ${burst},`,
+    '};',
+    '',
+  ].join('\n');
 }
 
 function csvRows(count: number, seed: number): string {

@@ -38,6 +38,9 @@ export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     GIT_PAGER: 'cat',
     PAGER: 'cat',
     GIT_EDITOR: 'false', // nothing gittree runs should open an editor; fail fast if one tries
+    // Paths gittree passes are file names from git's own output: `*`, `?`, `[` and a leading `:` must
+    // not turn them into globs or pathspec magic (`a[1].txt` would otherwise also match `a1.txt`).
+    GIT_LITERAL_PATHSPECS: '1',
     LC_ALL: 'C', // stable, untranslated messages
   };
 }

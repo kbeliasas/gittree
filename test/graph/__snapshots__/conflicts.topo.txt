@@ -1,0 +1,5 @@
+●    Indent limits by four spaces  (main)
+○─╮  Merge branch 'feature/SHOP-31-retries'
+│ ●  SHOP-31 Retry five times  (feature/SHOP-31-retries)
+● │  Retry once, back off longer
+●─╯  Add retry settings

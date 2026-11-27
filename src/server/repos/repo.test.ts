@@ -84,4 +84,13 @@ describe('readRepoInfo', () => {
     expect(bare).toMatchObject({ bare: true, head: { branch: 'main' } });
     expect(bare.commitCount).toBe(graphSize(repos.branchesOrigin.dir));
   });
+
+  it('links commits to the hosting service of origin, and not to local remotes', async () => {
+    expect((await info(repos.conflicts.dir)).web).toEqual({
+      host: 'GitHub',
+      commitUrl: 'https://github.com/example/shop/commit/{sha}',
+    });
+    expect((await info(repos.branches.dir)).web).toBeNull(); // origin is a folder on disk
+    expect((await info(repos.linear.dir)).web).toBeNull(); // no remotes
+  });
 });

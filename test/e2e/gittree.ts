@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
+import { join } from 'node:path';
 
-import type { Fixtures } from '../fixtures/build.ts';
+import { FIXTURE_CONFIG_HOME, type Fixtures } from '../fixtures/build.ts';
 
 export const fixtures = JSON.parse(process.env.GITTREE_E2E_FIXTURES ?? 'null') as Fixtures;
 
@@ -14,10 +15,14 @@ export interface Gittree {
   stop(): Promise<void>;
 }
 
-/** Starts the built CLI the way a user would, and reads the sign-in link it prints. */
+/**
+ * Starts the built CLI the way a user would, and reads the sign-in link it prints. Its settings
+ * come from the fixtures (Jira keys and base URL), never from the user's own config folder.
+ */
 export async function startGittree(repoDir: string): Promise<Gittree> {
   const child = spawn(process.execPath, ['dist/server/cli.js', repoDir, '--no-open', '--verbose'], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, XDG_CONFIG_HOME: join(fixtures.root, FIXTURE_CONFIG_HOME) },
   });
   let output = '';
   const collect = (chunk: Buffer) => {

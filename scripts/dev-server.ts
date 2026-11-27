@@ -7,6 +7,7 @@ import { checkGitVersion } from '../src/server/git/version.ts';
 import { RepoRegistry } from '../src/server/repos/registry.ts';
 import { resolveRepo } from '../src/server/repos/repo.ts';
 import { Session } from '../src/server/security/session.ts';
+import { defaultConfigDir } from '../src/server/settings/settings.ts';
 import { startServer } from '../src/server/start.ts';
 
 const env = process.env;
@@ -26,6 +27,7 @@ const server = await startServer({
   gitVersion,
   registry,
   session: new Session({ token: required('GITTREE_DEV_TOKEN'), secret: required('GITTREE_DEV_SECRET') }),
+  configDir: defaultConfigDir(),
   webRoot: null, // Vite serves the web app in dev
   listenPort: Number(required('GITTREE_API_PORT')),
   extraOrigins: [required('GITTREE_DEV_ORIGIN')],

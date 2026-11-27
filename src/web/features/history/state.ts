@@ -40,16 +40,21 @@ interface HoverState {
   row: number | null;
   /** Alt (Option) is held: highlight all ancestors instead of the branch line. */
   alt: boolean;
+  /** Something in the details panel is hovered that lights up commits, e.g. a merge's merged commits. */
+  panel: Emphasis | null;
   setRow(row: number | null, alt?: boolean): void;
   setAlt(alt: boolean): void;
+  setPanel(panel: Emphasis | null): void;
 }
 
 export const useHover = create<HoverState>()((set) => ({
   row: null,
   alt: false,
+  panel: null,
   setRow: (row, alt) =>
     set((state) => (state.row === row && (alt === undefined || alt === state.alt) ? state : { row, alt: alt ?? state.alt })),
   setAlt: (alt) => set((state) => (state.alt === alt ? state : { alt })),
+  setPanel: (panel) => set((state) => (state.panel === panel ? state : { panel })),
 }));
 
 /** What's highlighted; everything else is dimmed. */

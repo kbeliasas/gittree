@@ -24,6 +24,7 @@ const WITH_COMMITS: FixtureName[] = [
   'worktree',
   'worktreeLinked',
   'submodule',
+  'conflicts',
 ];
 
 // A private copy this file may change; the shared fixtures must stay byte-identical.

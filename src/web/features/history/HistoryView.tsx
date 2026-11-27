@@ -1,21 +1,24 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 
-import type { GraphOrder, GraphRef } from '../../../shared/api.ts';
+import type { ChangedFile, CompareWith, GraphOrder, GraphRef } from '../../../shared/api.ts';
 import { errorMessage } from '../../components/Screens.tsx';
-import { firstParent } from '../../graph/dag.ts';
+import { firstParent, parentCount } from '../../graph/dag.ts';
 import { childrenByLine, findRow, type GraphModel } from '../../graph/model.ts';
-import { ancestors, focusBranch, type BranchFocus } from '../../graph/reach.ts';
+import { ancestors, focusBranch, mergedCommits, type BranchFocus } from '../../graph/reach.ts';
 import { cx } from '../../lib/cx.ts';
 import { numberFormat, plural, shortSha } from '../../lib/format.ts';
-import type { HistorySearch } from '../../router.tsx';
+import { commitQuery } from '../../lib/queries.ts';
+import type { HistorySearch } from '../../lib/search.ts';
+import { DetailsPanel } from '../details/DetailsPanel.tsx';
+import { DiffPanel } from '../diff/DiffPanel.tsx';
 import { CommitList } from './CommitList.tsx';
 import { useGraph, useHover, type Emphasis, type LoadedGraph } from './state.ts';
-import { SummaryPanel } from './SummaryPanel.tsx';
 
 const route = getRouteApi('/r/$repoId/history');
 
-/** History (home): commit graph and list, summary of the selected commit on the right. */
+/** History (home): commit graph and list; details of the selected commit, or a file's diff, on the right. */
 export function HistoryView() {
   const { repoId } = route.useParams();
   const search = route.useSearch();
@@ -32,16 +35,27 @@ export function HistoryView() {
       </Message>
     );
   }
-  return <History graph={data} search={search} switching={switching} />;
+  return <History repoId={repoId} graph={data} search={search} switching={switching} />;
 }
 
-function History({ graph, search, switching }: { graph: LoadedGraph; search: HistorySearch; switching: boolean }) {
+/** Whether a commit can be compared with `compare`: that parent exists, or it is a merge for `cc`. */
+function supports(model: GraphModel, row: number, compare: CompareWith): boolean {
+  const parents = parentCount(model, row);
+  return compare === 'cc' ? parents >= 2 : compare <= Math.max(1, parents);
+}
+
+function History(props: { repoId: string; graph: LoadedGraph; search: HistorySearch; switching: boolean }) {
+  const { repoId, graph, search, switching } = props;
   const navigate = route.useNavigate();
   const { model, analysis } = graph;
   const order = search.order ?? 'date';
 
   const fromUrl = search.sel ? findRow(model, search.sel) : -1;
   const selected = fromUrl >= 0 ? fromUrl : Math.max(0, model.headRow);
+  const selectedSha = model.commits[selected]!.sha;
+  const compare: CompareWith = search.parent !== undefined && supports(model, selected, search.parent) ? search.parent : 1;
+  const details = useQuery(commitQuery(repoId, selectedSha, compare));
+  const files: readonly ChangedFile[] | null = (details.data?.sha === selectedSha && details.data.compare?.files) || null;
 
   const update = useCallback(
     (patch: HistorySearch, replace = false) => {
@@ -49,13 +63,35 @@ function History({ graph, search, switching }: { graph: LoadedGraph; search: His
     },
     [navigate],
   );
-  /** Clicks and jumps add a Back entry; stepping with the keyboard replaces it. */
+  /**
+   * Clicks and jumps add a Back entry; stepping with the keyboard replaces it. An open diff stays
+   * open, and the comparison carries over when the next commit has that parent too.
+   */
   const select = useCallback(
     (row: number, replace = false) => {
       const sha = model.commits[row]?.sha;
-      if (sha) update({ sel: sha }, replace);
+      if (!sha) return;
+      update({ sel: sha, parent: search.parent !== undefined && supports(model, row, search.parent) ? search.parent : undefined }, replace);
     },
-    [model, update],
+    [model, update, search.parent],
+  );
+  const openFile = useCallback((path: string, replace = false) => update({ file: path }, replace), [update]);
+  const closeDiff = useCallback(() => update({ file: undefined }), [update]);
+  // Enter right after selecting a commit shouldn't be lost while its file list loads.
+  const queryClient = useQueryClient();
+  const current = useRef(selectedSha);
+  current.current = selectedSha;
+  const openFirstFile = useCallback(async () => {
+    const sha = selectedSha;
+    const data = await queryClient.fetchQuery(commitQuery(repoId, sha, compare)).catch(() => null);
+    const first = data?.compare?.files[0];
+    if (first && current.current === sha) openFile(first.path);
+  }, [queryClient, repoId, selectedSha, compare, openFile]);
+  const setCompare = useCallback((value: CompareWith) => update({ parent: value === 1 ? undefined : value }), [update]);
+
+  const merged = useMemo(
+    () => (parentCount(model, selected) > 1 ? mergedCommits(model, selected, (row) => model.commits[row]!.authorTime) : null),
+    [model, selected],
   );
 
   const focusRef = search.focus ? model.payload.refs.find((r) => r.name === search.focus && r.kind !== 'tag') : undefined;
@@ -76,25 +112,36 @@ function History({ graph, search, switching }: { graph: LoadedGraph; search: His
 
   const hoverRow = useHover((state) => state.row);
   const alt = useHover((state) => state.alt);
+  const panelEmphasis = useHover((state) => state.panel);
   useEffect(() => useHover.getState().setRow(null), [model]);
   const emphasis = useMemo((): Emphasis | null => {
+    if (panelEmphasis) return panelEmphasis;
     if (focus) return focusEmphasis(focus);
     if (hoverRow === null || hoverRow >= model.count) return null;
     if (alt) return { kind: 'rows', rows: ancestors(model, hoverRow), marks: new Map() };
     return { kind: 'line', line: analysis.lines.owner[hoverRow]! };
-  }, [focus, hoverRow, alt, model, analysis]);
+  }, [panelEmphasis, focus, hoverRow, alt, model, analysis]);
 
+  const diffOpen = search.file !== undefined;
   useHistoryKeys({
     model,
     lane: analysis.layout.lane,
     selected,
     select,
     clearFocus: search.focus ? () => update({ focus: undefined }) : null,
+    files,
+    file: search.file ?? null,
+    openFile,
+    openFirstFile,
+    closeDiff,
   });
 
   return (
     <div className="flex min-h-0 flex-1">
-      <section className="flex min-w-0 flex-1 flex-col" aria-label="History">
+      <section
+        className={cx('@container flex min-w-0 flex-col', diffOpen ? 'w-[clamp(18rem,30%,30rem)] shrink-0' : 'flex-1')}
+        aria-label="History"
+      >
         <Toolbar
           model={model}
           order={order}
@@ -109,12 +156,40 @@ function History({ graph, search, switching }: { graph: LoadedGraph; search: His
           graph={graph}
           selected={selected}
           emphasis={emphasis}
+          marked={merged && merged.count > 0 ? merged.rows : null}
           focused={focusRef?.name ?? null}
           onSelect={select}
           onFocusRef={toggleFocus}
         />
       </section>
-      <SummaryPanel graph={graph} row={selected} onSelect={select} />
+      {diffOpen ? (
+        <DiffPanel
+          repoId={repoId}
+          graph={graph}
+          row={selected}
+          compare={compare}
+          details={details}
+          path={search.file!}
+          ignoreWhitespace={search.ws === true}
+          onClose={closeDiff}
+          onOpenFile={openFile}
+          onCompare={setCompare}
+          onIgnoreWhitespace={(ignore) => update({ ws: ignore ? true : undefined }, true)}
+        />
+      ) : (
+        <DetailsPanel
+          repoId={repoId}
+          graph={graph}
+          row={selected}
+          compare={compare}
+          details={details}
+          merged={merged}
+          onSelect={select}
+          onFocusRef={toggleFocus}
+          onCompare={setCompare}
+          onOpenFile={openFile}
+        />
+      )}
     </div>
   );
 }
@@ -138,18 +213,33 @@ function cleanSearch(search: HistorySearch): HistorySearch {
   if (search.sel) clean.sel = search.sel;
   if (search.order === 'topo') clean.order = 'topo';
   if (search.focus) clean.focus = search.focus;
+  if (search.parent !== undefined) clean.parent = search.parent;
+  if (search.file) clean.file = search.file;
+  if (search.ws) clean.ws = true;
   return clean;
 }
 
 const PAGE_ROWS = 20;
 
-/** PLAN §7 keys: ↑/↓ or j/k move, [ / ] parent / child, Esc clears the focus. Alt shows ancestors on hover. */
+/**
+ * PLAN §7 keys: ↑/↓ or j/k move, [ / ] parent / child, Enter opens the first file's diff, Esc
+ * closes the diff or clears the focus. Alt shows ancestors on hover. With a diff open, j/k step
+ * through the files, and the arrow keys scroll the diff unless the commit list has the focus.
+ */
 function useHistoryKeys(options: {
   model: GraphModel;
   lane: Int32Array;
   selected: number;
   select(row: number, replace?: boolean): void;
   clearFocus: (() => void) | null;
+  /** The selected commit's changed files, once loaded. */
+  files: readonly ChangedFile[] | null;
+  /** The file whose diff is open. */
+  file: string | null;
+  openFile(path: string, replace?: boolean): void;
+  /** Opens the selected commit's first file, waiting for the file list if needed. */
+  openFirstFile(): Promise<void>;
+  closeDiff(): void;
 }) {
   const latest = useRef(options);
   latest.current = options;
@@ -161,27 +251,43 @@ function useHistoryKeys(options: {
         return;
       }
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) return;
-      const { model, lane, selected, select, clearFocus } = latest.current;
+      const { model, lane, selected, select, clearFocus, files, file, openFile, openFirstFile, closeDiff } = latest.current;
       const last = model.count - 1;
+      const inList = event.target instanceof Element && event.target.closest('[data-commit-list]') !== null;
+      const diffKeys = file !== null && !inList;
+
+      if (file !== null && (event.key === 'j' || event.key === 'k')) {
+        const index = files?.findIndex((f) => f.path === file) ?? -1;
+        const next = files?.[index + (event.key === 'j' ? 1 : -1)];
+        if (next) openFile(next.path, true);
+        event.preventDefault();
+        return;
+      }
       switch (event.key) {
         case 'ArrowDown':
         case 'j':
+          if (diffKeys) return; // scroll the diff
           select(Math.min(last, selected + 1), true);
           break;
         case 'ArrowUp':
         case 'k':
+          if (diffKeys) return;
           select(Math.max(0, selected - 1), true);
           break;
         case 'PageDown':
+          if (diffKeys) return;
           select(Math.min(last, selected + PAGE_ROWS), true);
           break;
         case 'PageUp':
+          if (diffKeys) return;
           select(Math.max(0, selected - PAGE_ROWS), true);
           break;
         case 'Home':
+          if (diffKeys) return;
           select(0, true);
           break;
         case 'End':
+          if (diffKeys) return;
           select(last, true);
           break;
         case '[': {
@@ -196,9 +302,21 @@ function useHistoryKeys(options: {
           select(child);
           break;
         }
+        case 'Enter': {
+          // A focused button or link handles Enter itself.
+          if (file !== null || isInteractive(event.target)) return;
+          void openFirstFile();
+          break;
+        }
         case 'Escape':
-          if (!clearFocus) return;
-          clearFocus();
+          if (file !== null) {
+            closeDiff();
+            (document.querySelector('[data-commit-list]') as HTMLElement | null)?.focus({ preventScroll: true });
+          } else if (clearFocus) {
+            clearFocus();
+          } else {
+            return;
+          }
           break;
         default:
           return;
@@ -218,6 +336,10 @@ function useHistoryKeys(options: {
       window.removeEventListener('blur', onBlur);
     };
   }, []);
+}
+
+function isInteractive(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest('button, a, input, select, textarea, summary, [role="button"]') !== null;
 }
 
 function isTyping(target: EventTarget | null): boolean {
