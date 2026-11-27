@@ -18,7 +18,14 @@ export interface HistorySearch {
   file?: string;
   /** Ignore whitespace in the diff. */
   ws?: true;
+  /** Search query (PLAN §8 syntax). */
+  q?: string;
+  /** Hide commits the search doesn't match instead of dimming them. */
+  matches?: 'hide';
 }
+
+/** Longer queries are cut off when read from the URL. */
+export const MAX_QUERY_LENGTH = 2_000;
 
 const HASH = /^[0-9a-f]{4,64}$/;
 
@@ -34,6 +41,8 @@ export function validateHistorySearch(search: Record<string, unknown>): HistoryS
   }
   if (typeof search.file === 'string' && search.file !== '' && search.file.length <= 4096) result.file = search.file;
   if (search.ws === '1') result.ws = true;
+  if (typeof search.q === 'string' && search.q.trim() !== '') result.q = search.q.slice(0, MAX_QUERY_LENGTH);
+  if (search.matches === 'hide') result.matches = 'hide';
   return result;
 }
 

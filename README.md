@@ -5,8 +5,9 @@ diffs in your browser. It runs on your own machine, only reads your repository, 
 
 ![gittree's History view: a commit graph with feature branches, an octopus merge and criss-cross merges, next to the details of a selected merge commit](docs/screenshot.png)
 
-> **Status:** early development (v0.1.0). The History view (commit graph, commit details and diffs) works.
-> Search, Branches, File history & blame, Stats and Settings come next; see the [roadmap](#roadmap).
+> **Status:** early development (v0.1.0). The History view (commit graph, search, commit details and diffs) works.
+> Path and content search, simplified graph views, Branches, File history & blame, Stats and Settings come next; see
+> the [roadmap](#roadmap).
 
 - [Features](#features)
 - [Requirements](#requirements)
@@ -42,6 +43,32 @@ diffs in your browser. It runs on your own machine, only reads your repository, 
   Larger repositories show their newest 10,000 commits, with a note giving the total.
 - Handles detached HEAD, shallow and partial clones, bare repositories, linked worktrees, submodules, multiple root
   commits and empty repositories.
+
+### Search
+
+- One search bar above the commit list (press <kbd>/</kbd>). Free text matches subjects, message bodies, hash
+  prefixes and branch or tag names; tokens narrow the search down:
+
+  | Token | Matches |
+  |---|---|
+  | `author:alice` | Author name or email (after `.mailmap`) |
+  | `after:2025-03-01` · `before:1y` | Author date on or after / before a date (`YYYY-MM-DD`, `today`, `yesterday`) or an age (`3d`, `2w`, `6m`, `1y`) |
+  | `ref:release/*` | Commits a branch or tag points at; `*` and `?` match anything, and `origin/x` also matches as `x` |
+  | `jira:SHOP-12` · `jira:SHOP` | Commits that mention the issue (or any issue of the project), and the commits of branches named after it |
+  | `merges:only` · `merges:none` | Only merge commits, or no merge commits |
+  | `"fix login"` | A phrase; quotes also hold values with spaces: `author:"Alice Smith"` |
+  | `-term` | Leaves out what the term matches: `-author:bob`, `-wip` |
+
+- Every term has to match; the same token twice matches either value (`author:alice author:bob`).
+- **Matches: Dim** keeps the whole graph and dims the other commits; **Hide** shows only the matches, laid out on
+  their own and linked through the commits in between.
+- Suggestions complete token names, authors (most commits first), branches and tags, Jira keys and dates.
+  <kbd>Enter</kbd> jumps to the first match, and <kbd>n</kbd> / <kbd>N</kbd> step through the matches.
+- Outside the bar, the query shows as chips: click one to edit it, ✕ to remove it. Terms that can't be used are
+  marked in red and left out of the search.
+- **Tickets** lists the Jira issues in the history with their commit counts; pick one to search for it.
+- It all runs in the browser on the loaded history. Message bodies load in the background the first time you use
+  the search. Searching file paths and contents (`path:`, `content:`, `regex:`) comes next.
 
 ### Commit details
 
@@ -83,7 +110,7 @@ diffs in your browser. It runs on your own machine, only reads your repository, 
 ### Getting around
 
 - Fully usable from the keyboard; see [Keyboard shortcuts](#keyboard-shortcuts).
-- The URL holds the view: selected commit, graph order, focused branch, comparison and open diff. A reload keeps
+- The URL holds the view: selected commit, graph order, focused branch, search, comparison and open diff. A reload keeps
   your place, and the browser's Back and Forward buttons retrace your exploration
   (see [URL parameters](#url-parameters)).
 - Follows your system's light or dark theme.
@@ -181,11 +208,14 @@ header shows the repository, the checked-out branch, and flags such as *shallow 
    ancestors. Switch between **Date** and **Topo** order in the toolbar.
 2. **Inspect a commit.** Click it, or move with ↑/↓ or j/k. The panel on the right shows its message, people,
    relations, Jira keys and changed files.
-3. **Read a diff.** Click a file, or press Enter for the first one. The diff widens across most of the window,
+3. **Find something.** Press / and type, for example `author:alice login` or `jira:SHOP-12 -merges:only`. The
+   matches stay lit while the rest dims; switch **Matches** to **Hide** to see only them. Enter jumps to the first
+   match, n and N step through the others.
+4. **Read a diff.** Click a file, or press Enter for the first one. The diff widens across most of the window,
    with the commit's files beside it: j/k switch files, `[` and `]` switch commits, Esc goes back to the details.
-4. **Follow a branch.** Click a branch badge to focus it; the toolbar shows its own commits, fork point and
+5. **Follow a branch.** Click a branch badge to focus it; the toolbar shows its own commits, fork point and
    merge. Click the badge again or press Esc to clear the focus.
-5. **Look inside a merge.** Merges get a **vs** switch above their files: compare with each parent, or pick
+6. **Look inside a merge.** Merges get a **vs** switch above their files: compare with each parent, or pick
    **conflicts** to see only how conflicts were resolved.
 
 ### URL parameters
@@ -201,6 +231,8 @@ Every view has a link like `http://127.0.0.1:<port>/r/<repo-id>/history?sel=a0bf
 | `parent` | For a merge: compare with parent `2`, `3`, …, or `cc` for its conflict resolutions. Default: the first parent |
 | `file` | Path of the file whose diff is open |
 | `ws=1` | Ignore whitespace in the diff |
+| `q` | Search query, such as `author:alice jira:SHOP-12` |
+| `matches=hide` | Show only the commits the search matches. Default: dim the others |
 
 ## Keyboard shortcuts
 
@@ -215,7 +247,18 @@ Every view has a link like `http://127.0.0.1:<port>/r/<repo-id>/history?sel=a0bf
 | <kbd>]</kbd> | Child, preferring the one on the same branch line |
 | <kbd>Enter</kbd> | Open the first changed file's diff |
 | <kbd>Esc</kbd> | Clear the branch focus |
+| <kbd>/</kbd> | Go to the search bar |
+| <kbd>n</kbd> <kbd>N</kbd> | Next / previous search match |
 | Hold <kbd>Alt</kbd>/<kbd>⌥</kbd> while hovering | Light up all ancestors of the hovered commit |
+
+**In the search bar**
+
+| Key | Action |
+|---|---|
+| <kbd>↓</kbd> <kbd>↑</kbd> | Choose a suggestion |
+| <kbd>Tab</kbd> | Complete with the chosen (or first) suggestion |
+| <kbd>Enter</kbd> | Take the chosen suggestion; without one, jump to the first match |
+| <kbd>Esc</kbd> | Close the suggestions; again to go back to the commit list |
 
 **With a diff open**
 
@@ -235,11 +278,13 @@ jumping with <kbd>[</kbd> <kbd>]</kbd> adds a browser history entry, while stepp
 
 | Do this | To |
 |---|---|
-| Hover a commit | Light up its branch line and dim the rest |
+| Hover a commit | Light up its branch line and dim the rest (not while a search dims commits or a branch is focused) |
 | Click a commit | Select it and show its details |
 | Click a branch badge | Focus that branch; click again to clear (the default branch and tags can't be focused) |
 | Click a branch under **In** in the details | Focus that branch |
 | Hover **Merged** in a merge's details | Light up the commits it brought in |
+| Click a search chip | Edit the query there; its ✕ removes that term |
+| Click **Tickets**, then an issue | Search for that Jira issue; click it again to drop it |
 | Click a changed file | Open its diff |
 | Click **↓ 20**, **↑ 20** or **⋯ N unchanged lines** in a diff | Unfold the context around a change |
 
@@ -404,7 +449,7 @@ Test runs build their own copy in a temporary folder; `KEEP_FIXTURES=1 pnpm test
 src/
   shared/      zod schemas and API types used by both sides
   server/      CLI, Fastify app, security guard, git runner and parsers, routes
-  web/         React app: graph layout worker, History view, commit details, diff viewer
+  web/         React app: graph layout worker, History view, search, commit details, diff viewer
 test/
   fixtures/    builder for the fixture repositories
   graph/       lane-layout snapshots, one per fixture and graph order
@@ -426,7 +471,7 @@ gittree follows the milestones in [PLAN.md](PLAN.md):
 | ✅ | M0 Skeleton | CLI, local server with sign-in, read-only git runner, fixture repositories |
 | ✅ | M1 Graph | Commit graph and lane layout, hover and branch focus, keyboard navigation, URL state |
 | ✅ | M2 Details & diffs | Commit details, file lists, diff viewer, conflict resolutions, Jira and hosting links |
-| | M3 Search & focus | A search bar (`author:`, `path:`, `content:`, `jira:`, …) that dims or hides non-matching commits; branch visibility, first-parent and topology-only views |
+| 🚧 | M3 Search & focus | ✅ A search bar (`author:`, `jira:`, dates, refs, negation, suggestions) that dims or hides non-matching commits, and a Jira ticket list. Next: `path:`, `content:` and `regex:` search; then branch visibility, first-parent and topology-only views |
 | | M4 Repos & fetch | Settings view, recent repositories and scan roots, Cmd+K palette, a single shared instance, Fetch with progress, a "history changed" banner |
 | | M5 Branches | Stale, merged and upstream-gone branches with ahead/behind counts and copyable cleanup commands |
 | | M6 File history & blame | File finder, history across renames, blame tinted by age |

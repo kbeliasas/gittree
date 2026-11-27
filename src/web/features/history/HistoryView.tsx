@@ -1,20 +1,25 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import type { ChangedFile, CompareWith, GraphOrder, GraphRef } from '../../../shared/api.ts';
 import { errorMessage } from '../../components/Screens.tsx';
 import { firstParent, parentCount } from '../../graph/dag.ts';
 import { childrenByLine, findRow, type GraphModel } from '../../graph/model.ts';
 import { ancestors, focusBranch, mergedCommits, type BranchFocus } from '../../graph/reach.ts';
+import type { GraphView } from '../../graph/view.ts';
 import { cx } from '../../lib/cx.ts';
 import { numberFormat, plural, shortSha } from '../../lib/format.ts';
-import { commitQuery } from '../../lib/queries.ts';
+import { commitQuery, settingsQuery } from '../../lib/queries.ts';
+import { toggleJira, type QueryMatch, type Term } from '../../lib/query.ts';
 import type { HistorySearch } from '../../lib/search.ts';
 import { DetailsPanel } from '../details/DetailsPanel.tsx';
 import { DiffPanel } from '../diff/DiffPanel.tsx';
+import { SearchBar } from '../search/SearchBar.tsx';
+import { TicketList } from '../search/TicketList.tsx';
+import { nextMatch, useSearch } from '../search/useSearch.ts';
 import { CommitList } from './CommitList.tsx';
-import { useGraph, useHover, type Emphasis, type LoadedGraph } from './state.ts';
+import { emphasisInView, maskInView, useGraph, useHover, useShownGraph, type Emphasis, type LoadedGraph } from './state.ts';
 
 const route = getRouteApi('/r/$repoId/history');
 
@@ -49,6 +54,16 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
   const navigate = route.useNavigate();
   const { model, analysis } = graph;
   const order = search.order ?? 'date';
+  const query = search.q ?? '';
+
+  // PLAN §8: matches dim the rest, or the rest is hidden and the matches are laid out on their own.
+  const [wantBodies, setWantBodies] = useState(false);
+  const found = useSearch(repoId, graph, query, wantBodies);
+  const hide = search.matches === 'hide' && found.match !== null;
+  const shown = useShownGraph(graph, hide ? found.match!.rows : null);
+  const { view } = shown;
+  const jiraBase = useQuery(settingsQuery()).data?.jira.baseUrl ?? null;
+  const searchInput = useRef<HTMLInputElement>(null);
 
   const fromUrl = search.sel ? findRow(model, search.sel) : -1;
   const selected = fromUrl >= 0 ? fromUrl : Math.max(0, model.headRow);
@@ -67,13 +82,18 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
    * Clicks and jumps add a Back entry; stepping with the keyboard replaces it. An open diff stays
    * open, and the comparison carries over when the next commit has that parent too.
    */
+  const selection = useCallback(
+    (row: number): HistorySearch => ({
+      sel: model.commits[row]?.sha,
+      parent: search.parent !== undefined && supports(model, row, search.parent) ? search.parent : undefined,
+    }),
+    [model, search.parent],
+  );
   const select = useCallback(
     (row: number, replace = false) => {
-      const sha = model.commits[row]?.sha;
-      if (!sha) return;
-      update({ sel: sha, parent: search.parent !== undefined && supports(model, row, search.parent) ? search.parent : undefined }, replace);
+      if (model.commits[row]) update(selection(row), replace);
     },
-    [model, update, search.parent],
+    [model, update, selection],
   );
   const openFile = useCallback((path: string, replace = false) => update({ file: path }, replace), [update]);
   const closeDiff = useCallback(() => update({ file: undefined }), [update]);
@@ -113,19 +133,51 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
   const hoverRow = useHover((state) => state.row);
   const alt = useHover((state) => state.alt);
   const panelEmphasis = useHover((state) => state.panel);
-  useEffect(() => useHover.getState().setRow(null), [model]);
-  const emphasis = useMemo((): Emphasis | null => {
-    if (panelEmphasis) return panelEmphasis;
-    if (focus) return focusEmphasis(focus);
-    if (hoverRow === null || hoverRow >= model.count) return null;
-    if (alt) return { kind: 'rows', rows: ancestors(model, hoverRow), marks: new Map() };
-    return { kind: 'line', line: analysis.lines.owner[hoverRow]! };
-  }, [panelEmphasis, focus, hoverRow, alt, model, analysis]);
+  useEffect(() => useHover.getState().setRow(null), [view]);
+  // Search and focus stay put while the pointer moves; hovering only lights up lines when neither is on.
+  const dimmed = !hide && found.match ? found.match.rows : null;
+  const steady = useMemo((): Emphasis | null => {
+    if (panelEmphasis) return emphasisInView(panelEmphasis, view);
+    if (focus) {
+      const own = focusEmphasis(focus);
+      return emphasisInView(dimmed ? { ...own, rows: own.rows.map((lit, row) => lit & dimmed[row]!) } : own, view);
+    }
+    return dimmed ? { kind: 'rows', rows: dimmed, marks: new Map() } : null;
+  }, [panelEmphasis, focus, dimmed, view]);
+  const hovered = useMemo((): Emphasis | null => {
+    if (steady || hoverRow === null || hoverRow >= view.dag.count) return null;
+    if (alt) return { kind: 'rows', rows: ancestors(view.dag, hoverRow), marks: new Map() };
+    return { kind: 'line', line: shown.lines.owner[hoverRow]! };
+  }, [steady, hoverRow, alt, view, shown.lines]);
+  const emphasis = steady ?? hovered;
+
+  const stepMatch = useCallback(
+    (direction: 1 | -1) => {
+      const row = found.match ? nextMatch(found.match.rows, selected, direction) : -1;
+      if (row >= 0) select(row, true);
+    },
+    [found.match, selected, select],
+  );
+  const setQuery = useCallback((q: string, history: 'push' | 'replace') => update({ q: q || undefined }, history === 'replace'), [update]);
+  /** Enter in the search bar: the first match (unless the selection is one), then the commit list. */
+  const goToResults = useCallback(
+    (q: string, history: 'push' | 'replace' | null) => {
+      const match = found.matchFor(q);
+      let patch: HistorySearch = history === null ? {} : { q: q || undefined };
+      let replace = history === 'replace';
+      if (match && match.count > 0 && !match.rows[selected]) {
+        patch = { ...patch, ...selection(nextMatch(match.rows, -1, 1)) };
+        replace = false;
+      }
+      if (Object.keys(patch).length > 0) update(patch, replace);
+      focusCommitList();
+    },
+    [found, selected, selection, update],
+  );
 
   const diffOpen = search.file !== undefined;
   useHistoryKeys({
-    model,
-    lane: analysis.layout.lane,
+    view,
     selected,
     select,
     clearFocus: search.focus ? () => update({ focus: undefined }) : null,
@@ -134,7 +186,10 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
     openFile,
     openFirstFile,
     closeDiff,
+    stepMatch: found.match ? stepMatch : null,
+    focusSearch: () => searchInput.current?.focus(),
   });
+  const viewSelected = view.viewOf[selected] ?? -1;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -142,25 +197,53 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
         className={cx('@container flex min-w-0 flex-col', diffOpen ? 'w-[clamp(18rem,30%,30rem)] shrink-0' : 'flex-1')}
         aria-label="History"
       >
+        <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
+          <SearchBar
+            value={query}
+            onChange={setQuery}
+            suggestions={found.suggestions}
+            onActivate={() => setWantBodies(true)}
+            onSubmit={goToResults}
+            onLeave={focusCommitList}
+            inputRef={searchInput}
+          />
+          <MatchCount terms={found.terms} match={found.match} loading={found.loadingBodies} bodiesFailed={found.bodiesError} onStep={stepMatch} />
+          <TicketList
+            tickets={found.tickets}
+            terms={found.terms}
+            jiraBase={jiraBase}
+            loading={found.loadingBodies}
+            onToggle={(key) => update({ q: toggleJira(query, key) || undefined })}
+            onOpen={() => setWantBodies(true)}
+          />
+        </div>
         <Toolbar
           model={model}
           order={order}
           onOrder={(next) => update({ order: next === 'date' ? undefined : next })}
+          matches={query === '' ? null : search.matches === 'hide' ? 'hide' : 'dim'}
+          onMatches={(next) => update({ matches: next === 'hide' ? 'hide' : undefined })}
           focusName={search.focus ?? null}
           focus={focus}
           onClearFocus={() => update({ focus: undefined })}
           onSelect={select}
-          switching={switching}
+          switching={switching || shown.switching}
         />
-        <CommitList
-          graph={graph}
-          selected={selected}
-          emphasis={emphasis}
-          marked={merged && merged.count > 0 ? merged.rows : null}
-          focused={focusRef?.name ?? null}
-          onSelect={select}
-          onFocusRef={toggleFocus}
-        />
+        {hide && view.dag.count === 0 && !shown.switching ? (
+          <Message title="No commits match">Change the search, or show all commits with Matches: Dim.</Message>
+        ) : (
+          <CommitList
+            graph={graph}
+            shown={shown}
+            selected={viewSelected}
+            emphasis={emphasis}
+            marked={merged && merged.count > 0 ? maskInView(merged.rows, view) : null}
+            matched={found.match?.rows ?? null}
+            focused={focusRef?.name ?? null}
+            onSelect={select}
+            onFocusRef={toggleFocus}
+          />
+        )}
       </section>
       {diffOpen ? (
         <DiffPanel
@@ -194,7 +277,7 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
   );
 }
 
-function focusEmphasis(focus: BranchFocus): Emphasis {
+function focusEmphasis(focus: BranchFocus): Extract<Emphasis, { kind: 'rows' }> {
   const rows = focus.own.slice();
   const marks = new Map<number, 'fork' | 'merge'>();
   if (focus.fork >= 0) {
@@ -216,7 +299,13 @@ function cleanSearch(search: HistorySearch): HistorySearch {
   if (search.parent !== undefined) clean.parent = search.parent;
   if (search.file) clean.file = search.file;
   if (search.ws) clean.ws = true;
+  if (search.q) clean.q = search.q;
+  if (search.matches === 'hide') clean.matches = 'hide';
   return clean;
+}
+
+function focusCommitList() {
+  requestAnimationFrame(() => (document.querySelector('[data-commit-list]') as HTMLElement | null)?.focus({ preventScroll: true }));
 }
 
 const PAGE_ROWS = 20;
@@ -225,10 +314,12 @@ const PAGE_ROWS = 20;
  * PLAN §7 keys: ↑/↓ or j/k move, [ / ] parent / child, Enter opens the first file's diff, Esc
  * closes the diff or clears the focus. Alt shows ancestors on hover. With a diff open, j/k step
  * through the files, and the arrow keys scroll the diff unless the commit list has the focus.
+ * PLAN §8: / goes to the search bar, n / N to the next / previous match. Moves stay within the
+ * commits shown; from a hidden selection they start where it would be.
  */
 function useHistoryKeys(options: {
-  model: GraphModel;
-  lane: Int32Array;
+  view: GraphView;
+  /** The selected graph row. */
   selected: number;
   select(row: number, replace?: boolean): void;
   clearFocus: (() => void) | null;
@@ -240,6 +331,9 @@ function useHistoryKeys(options: {
   /** Opens the selected commit's first file, waiting for the file list if needed. */
   openFirstFile(): Promise<void>;
   closeDiff(): void;
+  /** Steps through search matches; null without a search. */
+  stepMatch: ((direction: 1 | -1) => void) | null;
+  focusSearch(): void;
 }) {
   const latest = useRef(options);
   latest.current = options;
@@ -251,10 +345,17 @@ function useHistoryKeys(options: {
         return;
       }
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) return;
-      const { model, lane, selected, select, clearFocus, files, file, openFile, openFirstFile, closeDiff } = latest.current;
-      const last = model.count - 1;
+      const { view, selected, select, clearFocus, files, file, openFile, openFirstFile, closeDiff, stepMatch, focusSearch } = latest.current;
+      const count = view.dag.count;
+      const at = view.viewOf[selected] ?? -1;
       const inList = event.target instanceof Element && event.target.closest('[data-commit-list]') !== null;
       const diffKeys = file !== null && !inList;
+      /** The commit `delta` rows away from the selection in the list. */
+      const move = (delta: number) => {
+        if (count === 0) return;
+        const base = at >= 0 ? at : firstShownAfter(view, selected) - (delta > 0 ? 1 : 0);
+        select(view.rows[Math.max(0, Math.min(count - 1, base + delta))]!, true);
+      };
 
       if (file !== null && (event.key === 'j' || event.key === 'k')) {
         const index = files?.findIndex((f) => f.path === file) ?? -1;
@@ -267,41 +368,49 @@ function useHistoryKeys(options: {
         case 'ArrowDown':
         case 'j':
           if (diffKeys) return; // scroll the diff
-          select(Math.min(last, selected + 1), true);
+          move(1);
           break;
         case 'ArrowUp':
         case 'k':
           if (diffKeys) return;
-          select(Math.max(0, selected - 1), true);
+          move(-1);
           break;
         case 'PageDown':
           if (diffKeys) return;
-          select(Math.min(last, selected + PAGE_ROWS), true);
+          move(PAGE_ROWS);
           break;
         case 'PageUp':
           if (diffKeys) return;
-          select(Math.max(0, selected - PAGE_ROWS), true);
+          move(-PAGE_ROWS);
           break;
         case 'Home':
-          if (diffKeys) return;
-          select(0, true);
+          if (diffKeys || count === 0) return;
+          select(view.rows[0]!, true);
           break;
         case 'End':
-          if (diffKeys) return;
-          select(last, true);
+          if (diffKeys || count === 0) return;
+          select(view.rows[count - 1]!, true);
           break;
         case '[': {
-          const parent = firstParent(model, selected);
-          if (parent < 0 || parent >= model.count) return;
-          select(parent);
+          const parent = at >= 0 ? firstParent(view.dag, at) : -1;
+          if (parent < 0 || parent >= count) return;
+          select(view.rows[parent]!);
           break;
         }
         case ']': {
-          const child = childrenByLine(model, lane, selected)[0];
+          const child = at >= 0 ? childrenByLine(view.dag, view.layout.lane, at)[0] : undefined;
           if (child === undefined) return;
-          select(child);
+          select(view.rows[child]!);
           break;
         }
+        case 'n':
+        case 'N':
+          if (!stepMatch) return;
+          stepMatch(event.key === 'n' ? 1 : -1);
+          break;
+        case '/':
+          focusSearch();
+          break;
         case 'Enter': {
           // A focused button or link handles Enter itself.
           if (file !== null || isInteractive(event.target)) return;
@@ -338,6 +447,18 @@ function useHistoryKeys(options: {
   }, []);
 }
 
+/** The first view row showing a commit below graph row `row` (view rows keep the graph's order); the count when none does. */
+function firstShownAfter(view: GraphView, row: number): number {
+  let low = 0;
+  let high = view.rows.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (view.rows[mid]! > row) high = mid;
+    else low = mid + 1;
+  }
+  return low;
+}
+
 function isInteractive(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest('button, a, input, select, textarea, summary, [role="button"]') !== null;
 }
@@ -351,6 +472,9 @@ interface ToolbarProps {
   model: GraphModel;
   order: GraphOrder;
   onOrder(order: GraphOrder): void;
+  /** How search misses are shown; null without a search. */
+  matches: 'dim' | 'hide' | null;
+  onMatches(matches: 'dim' | 'hide'): void;
   focusName: string | null;
   focus: BranchFocus | null;
   onClearFocus(): void;
@@ -358,28 +482,34 @@ interface ToolbarProps {
   switching: boolean;
 }
 
-function Toolbar({ model, order, onOrder, focusName, focus, onClearFocus, onSelect, switching }: ToolbarProps) {
+function Toolbar({ model, order, onOrder, matches, onMatches, focusName, focus, onClearFocus, onSelect, switching }: ToolbarProps) {
   const { total } = model.payload.page;
   return (
-    <div className="flex h-9 shrink-0 items-center gap-3 border-b border-zinc-200 px-3 text-xs dark:border-zinc-800">
+    <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-zinc-200 px-3 py-1 text-xs dark:border-zinc-800">
       <span className="text-zinc-500 dark:text-zinc-400">Order</span>
-      <div role="group" aria-label="Graph order" className="flex overflow-hidden rounded border border-zinc-300 dark:border-zinc-700">
-        {(['date', 'topo'] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={order === value}
-            title={value === 'date' ? 'Newest first: what happened when' : "Each branch's commits kept together, fewer crossings"}
-            className={cx(
-              'px-2 py-0.5',
-              order === value ? 'bg-zinc-800 text-white dark:bg-zinc-200 dark:text-zinc-900' : 'hover:bg-zinc-100 dark:hover:bg-zinc-800',
-            )}
-            onClick={() => onOrder(value)}
-          >
-            {value === 'date' ? 'Date' : 'Topo'}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        label="Graph order"
+        value={order}
+        options={[
+          { value: 'date', label: 'Date', title: 'Newest first: what happened when' },
+          { value: 'topo', label: 'Topo', title: "Each branch's commits kept together, fewer crossings" },
+        ]}
+        onChange={onOrder}
+      />
+      {matches && (
+        <>
+          <span className="text-zinc-500 dark:text-zinc-400">Matches</span>
+          <Segmented
+            label="Search misses"
+            value={matches}
+            options={[
+              { value: 'dim', label: 'Dim', title: 'Show every commit; the ones that don’t match are dimmed' },
+              { value: 'hide', label: 'Hide', title: 'Show only the matches, linked through the commits in between' },
+            ]}
+            onChange={onMatches}
+          />
+        </>
+      )}
 
       {focusName && (
         <div role="status" className="flex min-w-0 items-center gap-1.5 rounded-full bg-zinc-100 py-0.5 pr-1 pl-2.5 dark:bg-zinc-800">
@@ -431,6 +561,75 @@ function Toolbar({ model, order, onOrder, focusName, focus, onClearFocus, onSele
           plural(model.count, 'commit')
         )}
       </span>
+    </div>
+  );
+}
+
+function Segmented<T extends string>(props: {
+  label: string;
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string; title: string }>;
+  onChange(value: T): void;
+}) {
+  return (
+    <div role="group" aria-label={props.label} className="flex overflow-hidden rounded border border-zinc-300 dark:border-zinc-700">
+      {props.options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          aria-pressed={props.value === option.value}
+          title={option.title}
+          className={cx(
+            'px-2 py-0.5',
+            props.value === option.value
+              ? 'bg-zinc-800 text-white dark:bg-zinc-200 dark:text-zinc-900'
+              : 'hover:bg-zinc-100 dark:hover:bg-zinc-800',
+          )}
+          onClick={() => props.onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** "12 matches", with buttons for n / N; or why the query can't be used. */
+function MatchCount(props: {
+  terms: readonly Term[];
+  match: QueryMatch | null;
+  loading: boolean;
+  /** Why message bodies couldn't load; subjects are still searched. */
+  bodiesFailed: string | null;
+  onStep(direction: 1 | -1): void;
+}) {
+  const { terms, match, loading, bodiesFailed, onStep } = props;
+  if (!match) {
+    const problem = terms.find((t) => t.error);
+    return problem ? (
+      <span className="max-w-48 shrink truncate text-xs text-red-700 dark:text-red-400" title={problem.error}>
+        {problem.error}
+      </span>
+    ) : null;
+  }
+  const button = 'rounded px-1 hover:bg-zinc-100 disabled:opacity-40 dark:hover:bg-zinc-800';
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 text-xs text-zinc-600 dark:text-zinc-400" data-match-count>
+      <span aria-live="polite" className="mr-1 tabular-nums" title={loading ? 'Still reading commit messages: only subjects searched so far' : undefined}>
+        {match.count === 0 ? 'No matches' : plural(match.count, 'match', 'matches')}
+        {loading && '…'}
+      </span>
+      {bodiesFailed && (
+        <span className="mr-1 text-amber-700 dark:text-amber-400" title={`Couldn’t read the commit messages: ${bodiesFailed}`}>
+          (subjects only)
+        </span>
+      )}
+      <button type="button" className={button} aria-label="Previous match" title="Previous match (N)" disabled={match.count === 0} onClick={() => onStep(-1)}>
+        ↑
+      </button>
+      <button type="button" className={button} aria-label="Next match" title="Next match (n)" disabled={match.count === 0} onClick={() => onStep(1)}>
+        ↓
+      </button>
     </div>
   );
 }
