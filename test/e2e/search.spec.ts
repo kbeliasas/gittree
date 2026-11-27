@@ -132,7 +132,7 @@ test('clicking a chip edits the query there', async () => {
   await expect(searchBox()).toBeFocused();
   await expect(searchBox()).toHaveValue('author:carol -merges:only cart');
   await expect(page.locator('[data-chip]')).toHaveCount(0);
-  expect(await searchBox().evaluate((input: HTMLInputElement) => input.selectionStart)).toBe('author:carol -merges:only'.length);
+  expect(await searchBox().evaluate((input) => ('selectionStart' in input ? input.selectionStart : null))).toBe('author:carol -merges:only'.length);
 
   await page.keyboard.press('Escape'); // back to the list, chips again
   await expect(page.locator('[data-commit-list]')).toBeFocused();
