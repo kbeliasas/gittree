@@ -13,6 +13,7 @@ import {
   type RawChange,
 } from '../git/diff.ts';
 import { GitError } from '../git/errors.ts';
+import { isMissingObjectError } from '../git/partial.ts';
 import type { GitRunner } from '../git/runner.ts';
 import type { Repo } from '../repos/repo.ts';
 
@@ -87,6 +88,38 @@ function commitNotFound(sha: string): HttpError {
 }
 
 /**
+ * Awaits `work`, turning git's failure over objects a partial clone doesn't have locally (gittree
+ * never lets git download them, see git/partial.ts) into a 409 that says so. `what` names the
+ * missing contents; `download` is a git command that would download them.
+ */
+async function needingContents<T>(
+  git: GitRunner,
+  repo: Repo,
+  work: Promise<T>,
+  what: string,
+  download: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await work;
+  } catch (error) {
+    if (!(await isMissingObjectError(git, repo.path, error, signal))) throw error;
+    throw new HttpError(
+      409,
+      'objects_missing',
+      `This repository is a partial clone, and ${what} aren't stored locally. gittree doesn't download ` +
+        `missing objects. To download them, run this in the repository: ${download}`,
+    );
+  }
+}
+
+/** A command that makes git download what a diff against `parent` (null: root commit or `--cc`) needs. */
+function downloadCommand(sha: string, parent: string | null): string {
+  const short = (id: string) => id.slice(0, 12);
+  return parent === null ? `git show ${short(sha)}` : `git diff ${short(parent)} ${short(sha)}`;
+}
+
+/**
  * The commit's metadata plus its changed files compared with `compare`.
  * `loadCombined` lets the caller share (cache) the conflict-resolution diff with readFileDiff.
  */
@@ -108,7 +141,14 @@ export async function readCommitDetails(
     return { ...base, compare: { with: 'cc', files: combined.files } };
   }
   const parent = parentFor(meta, compare);
-  const changes = await readChanges(git, repo, parent, sha, signal);
+  const changes = await needingContents(
+    git,
+    repo,
+    readChanges(git, repo, parent, sha, signal),
+    'the contents of the files this commit changed',
+    downloadCommand(sha, parent),
+    signal,
+  );
   const sizes = await readSizes(git, repo, changes.flatMap((c) => [sizeable(c.oldMode, c.oldObject), sizeable(c.newMode, c.newObject)]), signal);
   return { ...base, compare: { with: parent === null ? 'root' : compare, files: changes.map((change) => toChangedFile(change, sizes)) } };
 }
@@ -201,13 +241,20 @@ export async function readCombined(
   if (meta.parents.length < 2) {
     throw new HttpError(400, 'not_a_merge', `Commit ${meta.sha} isn't a merge, so it has no conflict resolutions.`);
   }
-  const output = await git.text('diff-tree', {
-    cwd: repo.path,
+  const output = await needingContents(
+    git,
+    repo,
+    git.text('diff-tree', {
+      cwd: repo.path,
+      signal,
+      args: ['-r', '-z', '--cc', '--raw', '-p', ...PLAIN_DIFF, ...(ignoreWhitespace ? ['-w'] : [])],
+      revs: [meta.sha],
+      paths: [],
+    }),
+    'the contents of the files this merge changed',
+    downloadCommand(meta.sha, null),
     signal,
-    args: ['-r', '-z', '--cc', '--raw', '-p', ...PLAIN_DIFF, ...(ignoreWhitespace ? ['-w'] : [])],
-    revs: [meta.sha],
-    paths: [],
-  });
+  );
   const columns = meta.parents.length;
   const { changes, rest } = parseCombinedRaw(output);
   const raw = new Map(changes.map((change) => [change.path, change]));
@@ -273,20 +320,27 @@ export async function readFileDiff(git: GitRunner, repo: Repo, details: CommitDe
   // A file of n bytes has at most n + 1 lines, so this much context always yields a single hunk.
   const context = fullContext ? Math.max(file.oldSize ?? 0, file.newSize ?? 0) + 1 : 3;
   const parent = details.compare.with === 'root' ? null : details.parents[(details.compare.with as number) - 1]!;
-  const output = await git.text('diff-tree', {
-    cwd: repo.path,
+  const output = await needingContents(
+    git,
+    repo,
+    git.text('diff-tree', {
+      cwd: repo.path,
+      signal,
+      args: [
+        '-p',
+        ...PLAIN_DIFF,
+        `-U${context}`,
+        ...(ignoreWhitespace ? ['-w'] : []),
+        ...(file.oldPath !== undefined ? ['-M'] : []),
+        ...(parent === null ? ['--root'] : []),
+      ],
+      revs: parent === null ? [details.sha] : [parent, details.sha],
+      paths: file.oldPath !== undefined ? [file.oldPath, file.path] : [file.path],
+    }),
+    'the file versions this diff compares',
+    downloadCommand(details.sha, parent),
     signal,
-    args: [
-      '-p',
-      ...PLAIN_DIFF,
-      `-U${context}`,
-      ...(ignoreWhitespace ? ['-w'] : []),
-      ...(file.oldPath !== undefined ? ['-M'] : []),
-      ...(parent === null ? ['--root'] : []),
-    ],
-    revs: parent === null ? [details.sha] : [parent, details.sha],
-    paths: file.oldPath !== undefined ? [file.oldPath, file.path] : [file.path],
-  });
+  );
   const patch = parsePatch(output);
   return { ...base, ...(patch.binary ? { binary: true as const } : {}), fullContext, columns: 1, hunks: patch.hunks };
 }

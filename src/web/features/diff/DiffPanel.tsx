@@ -71,7 +71,11 @@ export function DiffPanel(props: DiffPanelProps) {
 
       <div className="flex min-h-0 flex-1">
         <nav aria-label="Changed files" className="w-[clamp(10rem,22%,16rem)] shrink-0 overflow-y-auto border-r border-zinc-200 p-2 dark:border-zinc-800">
-          {files ? <FileList files={files} selected={path} onOpen={(next) => onOpenFile(next)} /> : <Notice>{details.error ? errorMessage(details.error) : 'Loading…'}</Notice>}
+          {files ? (
+            <FileList files={files} selected={path} onOpen={(next) => onOpenFile(next)} />
+          ) : (
+            <Notice>{!data && details.error ? 'No file list.' : 'Loading…'}</Notice>
+          )}
           <p className="mt-4 px-1 text-[11px] text-zinc-500 dark:text-zinc-400">
             <kbd>j</kbd> / <kbd>k</kbd> next / previous file · <kbd>[</kbd> <kbd>]</kbd> parent / child commit · <kbd>Esc</kbd> back
           </p>
@@ -88,20 +92,22 @@ export function DiffPanel(props: DiffPanelProps) {
               mode={compare === 'cc' ? 'unified' : mode}
             />
           ) : (
-            <Notice>
-              {data && !data.compare
-                ? 'This commit’s parents aren’t in this shallow clone, so its changes can’t be shown.'
-                : files?.length === 0
-                  ? compare === 'cc'
-                    ? 'No conflict resolutions: every change came from one of the parents.'
-                    : 'This commit changes no files.'
-                  : 'Loading…'}
-            </Notice>
+            <Notice>{withoutFile(details, data, compare)}</Notice>
           )}
         </div>
       </div>
     </section>
   );
+}
+
+/** What the diff area says while it has no file to show. */
+function withoutFile(details: UseQueryResult<CommitDetails>, data: CommitDetails | undefined, compare: CompareWith): string {
+  if (!data) return details.error ? `Couldn’t load the changes: ${errorMessage(details.error)}` : 'Loading…';
+  if (!data.compare) return 'This commit’s parents aren’t in this shallow clone, so its changes can’t be shown.';
+  if (data.compare.files.length === 0) {
+    return compare === 'cc' ? 'No conflict resolutions: every change came from one of the parents.' : 'This commit changes no files.';
+  }
+  return 'Loading…'; // until the first file opens
 }
 
 function ModeToggle({ mode, onChange, disabled }: { mode: DiffMode; onChange(mode: DiffMode): void; disabled: boolean }) {

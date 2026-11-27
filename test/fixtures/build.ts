@@ -45,6 +45,8 @@ export const FIXTURE_NAMES = [
   'worktreeLinked', // the linked worktree
   'submodule', // superproject with `linear` as a submodule
   'conflicts', // a merge with a resolved conflict and an extra edit; a GitHub-style origin URL
+  'partial', // blobless clone (--filter=blob:none) of `conflicts`: only the checked-out files' contents are local
+  'partialBare', // bare blobless clone of `people`: no file contents at all, not even HEAD's .mailmap
 ] as const;
 export type FixtureName = (typeof FIXTURE_NAMES)[number];
 
@@ -81,6 +83,8 @@ const GLOBAL_CONFIG = `[user]
 \tauto = 0
 [maintenance]
 \tauto = false
+[uploadpack]
+\tallowFilter = true
 `;
 
 /** gittree's own settings for E2E runs and previews (`XDG_CONFIG_HOME` = FIXTURE_CONFIG_HOME under the fixtures root). */
@@ -102,9 +106,12 @@ export function fixtureGitEnv(root: string): NodeJS.ProcessEnv {
   };
 }
 
-/** Runs git in a fixture repository with the builder's isolated environment. */
+/**
+ * Runs git in a fixture repository with the builder's isolated environment. Never downloads what
+ * the partial clones lack (git 2.44+), as tests running in parallel share them.
+ */
 export function fixtureGit(fixtures: Pick<Fixtures, 'root'>, dir: string, args: readonly string[]): string {
-  return execGit(dir, fixtureGitEnv(fixtures.root), args);
+  return execGit(dir, { ...fixtureGitEnv(fixtures.root), GIT_NO_LAZY_FETCH: '1' }, args);
 }
 
 let gitBinary: string | undefined;
@@ -142,6 +149,8 @@ export function buildFixtures(rootDir: string): Fixtures {
   const merges = buildMerges(ctx);
   const branches = buildBranches(ctx);
   const worktree = buildWorktree(ctx);
+  const people = buildPeople(ctx);
+  const conflicts = buildConflicts(ctx);
 
   return {
     root,
@@ -151,7 +160,7 @@ export function buildFixtures(rootDir: string): Fixtures {
       merges: merges.result(),
       multiRoot: buildMultiRoot(ctx).result(),
       files: buildFiles(ctx).result(),
-      people: buildPeople(ctx).result(),
+      people: people.result(),
       branches: branches.repo.result(),
       branchesOrigin: branches.origin.result(),
       detached: buildDetached(ctx).result(),
@@ -160,7 +169,9 @@ export function buildFixtures(rootDir: string): Fixtures {
       worktree: worktree.main.result(),
       worktreeLinked: worktree.linked.result(),
       submodule: buildSubmodule(ctx).result(),
-      conflicts: buildConflicts(ctx).result(),
+      conflicts: conflicts.result(),
+      partial: buildPartialClone(ctx, conflicts, 'partial'),
+      partialBare: buildPartialClone(ctx, people, 'partial-bare.git', { bare: true }),
     },
   };
 }
@@ -466,6 +477,18 @@ function buildShallow(ctx: Context, source: RepoBuilder): RepoBuilder {
   // file:// so that --depth applies (plain local clones ignore it).
   run(ctx, ctx.root, ['clone', '-q', '--depth', '3', '--no-single-branch', `file://${source.dir}`, dir]);
   return new RepoBuilder(dir, ctx.env);
+}
+
+/**
+ * A blobless clone has every commit and tree but only the file contents a checkout needed, and git
+ * would download the rest from `source` whenever a command needs them (gittree must not let it).
+ * Same commits as `source`, so it shares its labels.
+ */
+function buildPartialClone(ctx: Context, source: RepoBuilder, name: string, options: { bare?: boolean } = {}): FixtureRepo {
+  const dir = join(ctx.root, name);
+  // file:// so that --filter applies (plain local clones copy everything); GLOBAL_CONFIG's uploadpack.allowFilter serves it.
+  run(ctx, ctx.root, ['clone', '-q', '--filter=blob:none', ...(options.bare ? ['--bare'] : []), `file://${source.dir}`, dir]);
+  return { dir, shas: source.result().shas };
 }
 
 function buildWorktree(ctx: Context): { main: RepoBuilder; linked: RepoBuilder } {

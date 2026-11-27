@@ -75,6 +75,21 @@
       ],
       "port": 4794,
       "url": "http://127.0.0.1:4794"
+    },
+    {
+      "name": "gittree-partial",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "XDG_CONFIG_HOME=test/fixtures/.repos/.home/.config",
+        "node",
+        "dist/server/cli.js",
+        "test/fixtures/.repos/partial",
+        "--no-open",
+        "--port",
+        "4795"
+      ],
+      "port": 4795,
+      "url": "http://127.0.0.1:4795"
     }
   ]
 }

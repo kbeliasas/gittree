@@ -155,7 +155,9 @@ git CLI → .git on disk        ~/.config/gittree (settings, recents)   ~/.cache
   `config --get`, plus `fetch`). Arguments are arrays, never a shell string; user input (refs, paths, patterns)
   goes after `--end-of-options` or `--`. Environment: `GIT_OPTIONAL_LOCKS=0` (never takes `index.lock` while your
   IDE works), `GIT_TERMINAL_PROMPT=0`, `GIT_LITERAL_PATHSPECS=1` (file names with `*`, `[` or a leading `:` stay
-  literal), `LC_ALL=C`, `core.quotepath=off`. Diffs run with `--no-ext-diff --no-textconv`.
+  literal), `GIT_NO_LAZY_FETCH=1` (in a partial clone git never downloads missing objects; what needs them says
+  they aren't stored locally; git 2.44+, older git ignores it), `LC_ALL=C`, `core.quotepath=off`. Diffs run with
+  `--no-ext-diff --no-textconv`.
 - **Localhost safety.** Bind 127.0.0.1 on a random free port. The CLI opens a URL with a one-time token that the
   server swaps for an HttpOnly, SameSite=Strict cookie; every request needs it, the Host header must be
   `127.0.0.1:<port>` or `localhost:<port>` (blocks DNS rebinding), and there is no CORS. Without this, any web page
@@ -429,13 +431,15 @@ and `/auth` proxied) and the server in watch mode; `pnpm build && pnpm link --gl
   annotated and lightweight tags; detached HEAD; empty repo; shallow clone; worktree; submodule; old branches for
   staleness; an upstream-gone branch (via a local bare remote); `.mailmap` duplicates; Jira-like keys including a
   `UTF-8` false positive; a merge with a resolved conflict, an edit only the merge made and a clean 3-way merge,
-  plus a whitespace-only commit and a GitHub-style `origin` URL (`conflicts`). The fixture root also holds a gittree
-  config (Jira base URL and keys) that E2E runs and previews use instead of yours.
+  plus a whitespace-only commit and a GitHub-style `origin` URL (`conflicts`); blobless partial clones of `conflicts`
+  and (bare) of `people`. The fixture root also holds a gittree config (Jira base URL and keys) that E2E runs and
+  previews use instead of yours.
 - **Unit:** parsers; lane-layout invariants (one commit per cell, edges only between adjacent rows, main stays in
   lane 0) plus a snapshot per fixture; parent rewriting for focus modes; query parser; Jira matcher; stats
   aggregations.
 - **Server:** every route against fixtures via Fastify `inject`, plus a **read-only test** that calls every
-  endpoint except fetch and asserts refs, index and working tree are byte-identical afterwards.
+  endpoint except fetch and asserts every file of every fixture (refs, index, working tree, object store) is
+  byte-identical afterwards, partial clones included.
 - **E2E:** open fixture → hover/click → diff; search dim/hide; branch row → focus; blame → commit; stats
   click-through.
 - **Performance budget** (a ~10k-commit public repo): graph interactive < 1.5 s after open · 60 fps scrolling ·
@@ -466,6 +470,7 @@ example, stats before search).
 | The local server exposes your code to other web pages (DNS rebinding, CSRF) | 127.0.0.1 only, random port, token cookie, Host/Origin checks, no CORS |
 | Fetch hangs on a credential prompt | Prompts disabled, SSH batch mode, 60 s timeout, clear error |
 | Interfering with your IDE's git use | Read commands only, `GIT_OPTIONAL_LOCKS=0`, retry transient lock errors |
+| git downloads what a partial clone lacks whenever a diff (or a bare repo's `.mailmap`) needs it: network access and new packs | `GIT_NO_LAZY_FETCH=1` (git 2.44+); diffs that need missing contents answer 409 `objects_missing`; the read-only test covers two partial clones |
 | Squash and rebase merges are invisible to "merged?" and habit stats | `git cherry` hint for rebases; squash merges estimated from messages and labeled as estimates |
 | Jira false positives (`UTF-8`, `SHA-256`) | Configured project keys; deny-list fallback |
 | One person with several emails skews stats | `.mailmap` (`%aN` / `%aE`); an alias editor later |

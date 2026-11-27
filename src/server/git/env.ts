@@ -41,6 +41,11 @@ export function gitEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     // Paths gittree passes are file names from git's own output: `*`, `?`, `[` and a leading `:` must
     // not turn them into globs or pathspec magic (`a[1].txt` would otherwise also match `a1.txt`).
     GIT_LITERAL_PATHSPECS: '1',
+    // In a partial clone (e.g. `--filter=blob:none`), git downloads missing objects from the remote
+    // whenever a command needs them: a diff, line counts, a blob size, a bare repo's HEAD:.mailmap.
+    // That touches the network and writes packs into .git/objects. With this, git fails instead
+    // (see partial.ts). Needs git 2.44+; older git ignores it and still downloads them.
+    GIT_NO_LAZY_FETCH: '1',
     LC_ALL: 'C', // stable, untranslated messages
   };
 }

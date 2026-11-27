@@ -1,6 +1,10 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { expect, test, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
 import { FIXTURE_JIRA, type FixtureName } from '../fixtures/build.ts';
+import { NO_LAZY_FETCH_SUPPORTED } from '../helpers/git.ts';
 import { fixtures, startGittree, type Gittree } from './gittree.ts';
 
 /** PLAN §11 E2E for M2: commit details, merged commits, Jira links, file list, diffs, conflict resolutions. */
@@ -230,5 +234,35 @@ test.describe('conflicts', () => {
     await diff(page).getByLabel('Ignore whitespace').check();
     expect(search(page, 'ws')).toBe('1');
     await expect(diff(page)).toContainText('No changes when whitespace is ignored.');
+  });
+});
+
+test.describe('partial clone', () => {
+  // Older git ignores GIT_NO_LAZY_FETCH and downloads the missing contents (see test/helpers/git.ts).
+  test.skip(!NO_LAZY_FETCH_SUPPORTED, 'needs git 2.44 or newer');
+  const { dir, shas } = fixtures.repos.partial;
+  const packs = () => readdirSync(join(dir, '.git', 'objects', 'pack')).sort();
+  let s: Session;
+  let before: string[];
+  test.beforeAll(async ({ browser }) => {
+    before = packs();
+    s = await open(browser, 'partial');
+  });
+  test.afterAll(() => close(s));
+
+  test('says which file contents aren’t stored locally instead of downloading them', async () => {
+    const { page } = s;
+    const download = `git diff ${shas['conflict-merge']!.slice(0, 12)} ${shas.head!.slice(0, 12)}`;
+    await page.goto(`${s.historyUrl}?sel=${shas.head}`);
+    await expect(panel(page).getByRole('heading', { level: 2 })).toHaveText('Indent limits by four spaces');
+    await expect(panel(page)).toContainText(
+      "Couldn’t load the changes: This repository is a partial clone, and the contents of the files this commit changed aren't stored locally.",
+    );
+    await expect(panel(page)).toContainText(`To download them, run this in the repository: ${download}`);
+
+    // A link straight to a diff says the same where the diff would be.
+    await page.goto(`${s.historyUrl}?sel=${shas.head}&file=src%2Flimits.ts`);
+    await expect(diff(page)).toContainText(`To download them, run this in the repository: ${download}`);
+    expect(packs()).toEqual(before);
   });
 });

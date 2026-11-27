@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { DAY, fixtureGit, T0, type FixtureName } from '../../../test/fixtures/build.ts';
 import { HOST, json, makeTestApp, signIn, type TestApp } from '../../../test/helpers/app.ts';
-import type { ChangedFile, CommitDetails, FileDiff } from '../../shared/api.ts';
+import { NO_LAZY_FETCH_SUPPORTED } from '../../../test/helpers/git.ts';
+import type { ApiErrorBody, ChangedFile, CommitDetails, FileDiff } from '../../shared/api.ts';
 import { readCommitDetails, readCombined, readFileDiff } from '../commits/commit.ts';
 
 const fixtures = inject('fixtures');
 const { repos } = fixtures;
-const NAMES: FixtureName[] = ['files', 'merges', 'people', 'conflicts', 'shallow', 'submodule', 'linear'];
+const NAMES: FixtureName[] = ['files', 'merges', 'people', 'conflicts', 'shallow', 'submodule', 'linear', 'partial'];
 
 let t: TestApp;
 let cookie: string;
@@ -220,5 +221,33 @@ describe('GET /api/repos/:id/diff', () => {
     const response = await get(`/api/repos/${repoOf('files').id}/diff?sha=${sha('files', 'rename')}&path=README.md`);
     expect(response.statusCode).toBe(404);
     expect(json<{ error: string }>(response).error).toBe('file_not_changed');
+  });
+});
+
+// Older git would download the missing contents into the shared fixture instead (see test/helpers/git.ts).
+describe.skipIf(!NO_LAZY_FETCH_SUPPORTED)('a partial clone without the file contents a diff needs', () => {
+  const short = (label: string) => sha('partial', label).slice(0, 12);
+
+  /** A 409 that says what isn't stored locally and which git command would download it. */
+  async function expectNotStored(url: string, download: string): Promise<void> {
+    const response = await get(url);
+    expect(response.statusCode, url).toBe(409);
+    const body = json<ApiErrorBody>(response);
+    expect(body.error).toBe('objects_missing');
+    expect(body.message).toMatch(/^This repository is a partial clone, and the .+ aren't stored locally\. gittree doesn't download/);
+    expect(body.message).toMatch(new RegExp(`To download them, run this in the repository: ${download}$`));
+  }
+
+  it('says so for a file diff instead of downloading the old version', async () => {
+    // HEAD's version of limits.ts was checked out, so it is local; the version before isn't.
+    const url = `/api/repos/${repoOf('partial').id}/diff?sha=${sha('partial', 'head')}&path=src%2Flimits.ts`;
+    await expectNotStored(url, `git diff ${short('conflict-merge')} ${short('head')}`);
+  });
+
+  it('says so for conflict resolutions', async () => {
+    const id = repoOf('partial').id;
+    const merge = sha('partial', 'conflict-merge');
+    await expectNotStored(`/api/repos/${id}/commits/${merge}?parent=cc`, `git show ${short('conflict-merge')}`);
+    await expectNotStored(`/api/repos/${id}/diff?sha=${merge}&parent=cc&path=src%2Fretry.ts`, `git show ${short('conflict-merge')}`);
   });
 });

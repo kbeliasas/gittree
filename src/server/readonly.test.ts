@@ -6,11 +6,15 @@ import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 
 import { fixtureGit } from '../../test/fixtures/build.ts';
 import { HOST, makeTestApp, signIn, type TestApp } from '../../test/helpers/app.ts';
+import { NO_LAZY_FETCH_SUPPORTED } from '../../test/helpers/git.ts';
 import type { Repo } from './repos/repo.ts';
 
 /**
- * PLAN.md §11: every endpoint except fetch must leave refs, index and working
- * tree byte-identical. Each new GET route needs a sample request here; the
+ * PLAN.md §11: every endpoint except fetch must leave every file of every
+ * repository byte-identical: refs, index, working tree and object store. That
+ * includes partial clones, where git would download the file contents they lack
+ * whenever a command needs them; routes that need those contents answer 409
+ * `objects_missing` instead. Each new GET route needs a sample request here; the
  * coverage test fails until it has one.
  */
 interface Sample {
@@ -41,13 +45,16 @@ const SAMPLES: Record<string, (sample: Sample) => string[]> = {
 const EXEMPT = new Set(['GET /auth']);
 
 const fixtures = inject('fixtures');
+const PARTIAL_CLONES: ReadonlySet<string> = new Set([fixtures.repos.partial.dir, fixtures.repos.partialBare.dir]);
 
 let t: TestApp;
 let cookie: string;
 let samples: Sample[];
 
 beforeAll(async () => {
-  t = await makeTestApp(Object.values(fixtures.repos).map((repo) => repo.dir));
+  // Older git ignores GIT_NO_LAZY_FETCH and would download into the partial clones.
+  const dirs = Object.values(fixtures.repos).map((repo) => repo.dir);
+  t = await makeTestApp(dirs.filter((dir) => NO_LAZY_FETCH_SUPPORTED || !PARTIAL_CLONES.has(dir)));
   cookie = await signIn(t);
   samples = t.repos.map((repo) => {
     const git = (...args: string[]) => fixtureGit(fixtures, repo.path, args);
@@ -73,15 +80,24 @@ describe('read-only guarantee', () => {
 
   it('leaves every fixture repository byte-identical', async () => {
     const before = snapshot(fixtures.root);
+    const missing: string[] = [];
     for (const sample of samples) {
       for (const urls of Object.values(SAMPLES)) {
         for (const url of urls(sample)) {
           const response = await t.app.inject({ url, headers: { host: HOST, cookie } });
-          expect(response.statusCode, `${url} for ${sample.repo.name}`).toBe(200);
+          const what = `${url} for ${sample.repo.name}`;
+          if (PARTIAL_CLONES.has(sample.repo.path) && response.statusCode === 409) {
+            expect(response.json<{ error: string }>().error, what).toBe('objects_missing');
+            missing.push(what);
+            continue;
+          }
+          expect(response.statusCode, what).toBe(200);
         }
       }
     }
-    expect(snapshot(fixtures.root)).toEqual(before);
+    expect(changes(before, snapshot(fixtures.root)), 'files written under the fixtures root').toEqual([]);
+    // Some requests did need contents the partial clones lack, and git didn't download them.
+    if (NO_LAZY_FETCH_SUPPORTED) expect(missing, 'requests answered 409 objects_missing').not.toEqual([]);
   });
 });
 
@@ -104,4 +120,15 @@ function snapshot(root: string): Map<string, string> {
   };
   walk(root);
   return entries;
+}
+
+/** Paths that differ between two snapshots: `+` added, `~` changed, `-` removed. */
+function changes(before: Map<string, string>, after: Map<string, string>): string[] {
+  const lines: string[] = [];
+  for (const [path, hash] of after) {
+    if (!before.has(path)) lines.push(`+ ${path}`);
+    else if (before.get(path) !== hash) lines.push(`~ ${path}`);
+  }
+  for (const path of before.keys()) if (!after.has(path)) lines.push(`- ${path}`);
+  return lines;
 }
