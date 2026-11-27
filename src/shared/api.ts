@@ -174,6 +174,53 @@ export const MessagesPayload = z.object({
 export type MessagesPayload = z.infer<typeof MessagesPayload>;
 
 // ---------------------------------------------------------------------------
+// Server search (PLAN §8: path:, content:, regex:)
+
+export const SearchKind = z.enum(['path', 'content', 'regex']);
+export type SearchKind = z.infer<typeof SearchKind>;
+
+export const SearchQuery = MessagesQuery.extend({
+  kind: SearchKind,
+  /** A path or git glob, an exact text, or a POSIX extended regular expression. */
+  value: z
+    .string()
+    .min(1)
+    .max(1000)
+    .refine((value) => !value.includes('\0'), 'must not contain NUL'),
+  /** `i`: ignore case (regex only). */
+  flags: z.enum(['', 'i']).default(''),
+});
+export type SearchQuery = z.infer<typeof SearchQuery>;
+
+/**
+ * One line of the search's NDJSON stream. Progress events carry the commits
+ * matched since the previous one; the stream ends with `done` or `error`.
+ */
+export const SearchEvent = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('progress'),
+    /** Commits searched so far, of `total`: the graph page's commits. */
+    searched: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    matches: z.array(Sha),
+  }),
+  z.object({ type: z.literal('done'), searched: z.number().int().nonnegative(), total: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('error'), error: z.string(), message: z.string() }),
+]);
+export type SearchEvent = z.infer<typeof SearchEvent>;
+
+export const TreeQuery = z.object({ at: Sha });
+export type TreeQuery = z.infer<typeof TreeQuery>;
+
+/** Every file at a commit (PLAN §6 "Files at a commit"); `path:` suggestions use HEAD's. */
+export const TreePayload = z.object({
+  at: Sha,
+  /** Paths of files (symlinks and submodules included), sorted the way git sorts them. */
+  paths: z.array(z.string()),
+});
+export type TreePayload = z.infer<typeof TreePayload>;
+
+// ---------------------------------------------------------------------------
 // Commit details and diffs
 
 /** Octopus merges rarely have more than a handful of parents; git itself allows many. */
