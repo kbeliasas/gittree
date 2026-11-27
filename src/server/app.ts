@@ -1,4 +1,5 @@
 import fastifyCookie from '@fastify/cookie';
+import fastifyRateLimit from '@fastify/rate-limit';
 import Fastify, {
   LogController,
   type FastifyBaseLogger,
@@ -20,6 +21,7 @@ import { healthRoutes } from './routes/health.ts';
 import { repoRoutes } from './routes/repos.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { installGuard } from './security/guard.ts';
+import { API_RATE_LIMIT, rateLimitOptions, type ApiRateLimit } from './security/rate-limit.ts';
 import type { Session } from './security/session.ts';
 import { registerWeb } from './web.ts';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from './zod.ts';
@@ -47,6 +49,8 @@ export interface AppOptions {
   extraOrigins?: readonly string[];
   /** Print one line per request (tokens redacted). */
   logRequests?: boolean;
+  /** Cap on /api requests. Defaults to API_RATE_LIMIT; tests lower it. */
+  rateLimit?: ApiRateLimit;
 }
 
 declare module 'fastify' {
@@ -73,6 +77,8 @@ export async function createApp(options: AppOptions): Promise<App> {
 
   await fastify.register(fastifyCookie); // parses cookies in its own onRequest hook, before the guard runs
   installGuard(fastify, { session: options.session, port, extraOrigins: options.extraOrigins });
+  // Awaited before any route exists: the plugin hooks into each route as it is added.
+  await fastify.register(fastifyRateLimit, rateLimitOptions(options.rateLimit ?? API_RATE_LIMIT));
   installErrorHandler(fastify);
   if (options.logRequests) {
     fastify.addHook('onResponse', async (request, reply) => {

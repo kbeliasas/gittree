@@ -5,6 +5,7 @@ import { createApp, type App } from '../../src/server/app.ts';
 import { GitRunner } from '../../src/server/git/runner.ts';
 import { RepoRegistry } from '../../src/server/repos/registry.ts';
 import { resolveRepo, type Repo } from '../../src/server/repos/repo.ts';
+import type { ApiRateLimit } from '../../src/server/security/rate-limit.ts';
 import { Session } from '../../src/server/security/session.ts';
 
 /** inject() never listens, so tests pick the port the Host check expects. */
@@ -20,7 +21,7 @@ export interface TestApp {
 
 export async function makeTestApp(
   repoDirs: readonly string[],
-  options: { webRoot?: string | null; extraOrigins?: string[]; configDir?: string } = {},
+  options: { webRoot?: string | null; extraOrigins?: string[]; configDir?: string; rateLimit?: ApiRateLimit } = {},
 ): Promise<TestApp> {
   const git = new GitRunner();
   const registry = new RepoRegistry();
@@ -37,6 +38,7 @@ export async function makeTestApp(
     webRoot: options.webRoot ?? null,
     port: TEST_PORT,
     extraOrigins: options.extraOrigins,
+    rateLimit: options.rateLimit,
   });
   return { app, session, repos, git };
 }

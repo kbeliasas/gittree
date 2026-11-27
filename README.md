@@ -297,6 +297,8 @@ gittree is designed to be safe to point at any repository on your machine.
   API. No CORS headers are ever sent.
 - A strict Content Security Policy lets the page load code from, and talk to, the gittree server only. API
   responses are never cached.
+- API requests are capped at 1,000 per 10 seconds, far more than the web app sends, so a runaway client can't
+  keep git busy. Requests the checks above refuse don't count toward it.
 - No telemetry and no network requests (on git older than 2.44, see the partial-clone note above).
 
 Found a way around any of this? Please report it privately, for example through GitHub's private vulnerability

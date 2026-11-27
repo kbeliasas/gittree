@@ -131,6 +131,37 @@ describe('request guard', () => {
   });
 });
 
+describe('rate limit', () => {
+  it('caps API requests, counting only the ones the guard lets through', async () => {
+    const limited = await makeTestApp([repos.linear.dir], { webRoot, rateLimit: { max: 3, timeWindowMs: 60_000 } });
+    const limitedCookie = await signIn(limited);
+    const call = (url: string, headers: Record<string, string> = {}) =>
+      limited.app.inject({ url, headers: { host: HOST, cookie: limitedCookie, ...headers } });
+
+    // More refused requests than the cap: no cookie, a foreign Host, a cross-site call.
+    for (let i = 0; i < 2; i++) {
+      expect((await limited.app.inject({ url: '/api/settings', headers: { host: HOST } })).statusCode).toBe(401);
+      expect((await call('/api/settings', { host: 'evil.example' })).statusCode).toBe(403);
+      expect((await call('/api/settings', { 'sec-fetch-site': 'cross-site' })).statusCode).toBe(403);
+    }
+
+    // All API routes share one budget.
+    for (const url of ['/api/settings', '/api/health', '/api/repos']) expect((await call(url)).statusCode).toBe(200);
+    const over = await call('/api/settings');
+    expect(over.statusCode).toBe(429);
+    expect(json(over)).toEqual({ error: 'rate_limited', message: expect.stringContaining('Try again in') });
+    expect(over.headers['retry-after']).toMatch(/^\d+$/);
+    expect(over.headers['cache-control']).toBe('no-store');
+    expect(over.headers['content-security-policy']).toContain("default-src 'self'");
+
+    // The web app and sign-in aren't limited.
+    expect((await call('/')).statusCode).toBe(200);
+    expect((await call('/assets/app-abc123.js')).statusCode).toBe(200);
+    expect((await call(`/auth?token=${limited.session.token}`)).statusCode).toBe(302);
+    await limited.app.close();
+  });
+});
+
 describe('API', () => {
   it('GET /api/health reports gittree and git versions', async () => {
     const response = await get('/api/health');
