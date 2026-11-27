@@ -11,8 +11,8 @@ import type { JiraMatcher } from './jira.ts';
 export const SEARCH_KEYS = ['author', 'after', 'before', 'ref', 'jira', 'merges', 'path', 'content', 'regex'] as const;
 export type SearchKey = (typeof SEARCH_KEYS)[number];
 
-/** Keys that git answers on the server; they arrive with server search. */
-export const SERVER_KEYS: ReadonlySet<SearchKey> = new Set(['path', 'content', 'regex']);
+/** Keys git answers on the server, streaming the commits they match (PLAN §8). */
+export const SERVER_KEYS: ReadonlySet<string> = new Set<SearchKey>(['path', 'content', 'regex']);
 
 /** Repeating one of these keys widens the search (either value matches); other terms all have to match. */
 const EITHER_KEYS: ReadonlySet<string> = new Set(['author', 'ref', 'jira', 'path', 'content', 'regex']);
@@ -100,7 +100,9 @@ export function parseQuery(text: string): Term[] {
 
 function termError(term: Term): string | undefined {
   if (term.key === 'text' || term.value === '') return undefined;
-  if (SERVER_KEYS.has(term.key)) return `${term.key}: search isn't available yet`;
+  if (term.key === 'regex' && term.flags !== undefined && term.flags !== '' && term.flags !== 'i') {
+    return 'Only the i flag works here: regex:/pattern/i';
+  }
   if ((term.key === 'after' || term.key === 'before') && parseDateBound(term.value, new Date()) === null) {
     return 'Use a date like 2025-03-01, today, yesterday, or an age like 2w, 3m, 1y';
   }
@@ -227,16 +229,25 @@ export interface QueryMatch {
 
 type Predicate = (row: number) => boolean;
 
+/** Identifies a server search: a `path:`, `content:` or `regex:` term, negated or not. */
+export function serverTermKey(term: Pick<Term, 'key' | 'value' | 'flags'>): string {
+  return `${term.key}\0${term.key === 'regex' ? (term.flags ?? '') : ''}\0${term.value}`;
+}
+
+/** Rows matched so far by each server term (by `serverTermKey`); a term not in it has matched nothing yet. */
+export type ServerRows = ReadonlyMap<string, Uint8Array>;
+
 /**
  * The rows the query selects, or null when it has nothing to search for (empty,
- * or only unfinished or invalid terms). Unsupported terms are left out.
+ * or only unfinished or invalid terms). Server terms use what their searches
+ * have found so far.
  */
-export function matchQuery(terms: readonly Term[], index: SearchIndex, now: Date): QueryMatch | null {
+export function matchQuery(terms: readonly Term[], index: SearchIndex, now: Date, server: ServerRows = new Map()): QueryMatch | null {
   const groups = new Map<string, Predicate[]>();
   const excluded: Predicate[] = [];
   terms.forEach((term, i) => {
     if (!isApplied(term)) return;
-    const predicate = compile(term, index, now);
+    const predicate = compile(term, index, now, server);
     if (!predicate) return;
     if (term.negate) {
       excluded.push(predicate);
@@ -261,9 +272,15 @@ export function matchQuery(terms: readonly Term[], index: SearchIndex, now: Date
   return { rows, count };
 }
 
-function compile(term: Term, index: SearchIndex, now: Date): Predicate | null {
+function compile(term: Term, index: SearchIndex, now: Date, server: ServerRows): Predicate | null {
   const value = term.value.toLowerCase();
   switch (term.key) {
+    case 'path':
+    case 'content':
+    case 'regex': {
+      const rows = server.get(serverTermKey(term));
+      return (row) => rows?.[row] === 1;
+    }
     case 'text': {
       const hash = /^[0-9a-f]{4,}$/.test(value);
       return (row) =>
@@ -293,8 +310,6 @@ function compile(term: Term, index: SearchIndex, now: Date): Predicate | null {
     }
     case 'merges':
       return value === 'only' ? (row) => index.merge[row] === 1 : (row) => index.merge[row] !== 1;
-    default:
-      return null;
   }
 }
 
@@ -350,6 +365,8 @@ export interface SuggestionSource {
   authors: ReadonlyArray<{ name: string; email: string; commits: number }>;
   refs: ReadonlyArray<{ name: string; kind: RefKind }>;
   jira: ReadonlyArray<{ key: string; commits: number }>;
+  /** Files at HEAD, for `path:`; null until loaded. */
+  paths: readonly string[] | null;
 }
 
 export interface Suggestions {
@@ -366,6 +383,9 @@ const KEY_HINTS: ReadonlyArray<{ key: SearchKey; detail: string }> = [
   { key: 'ref', detail: 'Branch or tag on the commit; * and ? match anything' },
   { key: 'jira', detail: 'Jira issue (SHOP-12) or project (SHOP)' },
   { key: 'merges', detail: 'only or none' },
+  { key: 'path', detail: 'Commits that changed a file or folder; * ? [ as git globs, ** across folders' },
+  { key: 'content', detail: 'Commits that add or remove this exact text (case-sensitive)' },
+  { key: 'regex', detail: 'Commits whose changed lines match /pattern/ (i: ignore case)' },
 ];
 
 const DATE_HINTS: ReadonlyArray<{ value: string; after: string; before: string }> = [
@@ -379,7 +399,35 @@ const DATE_HINTS: ReadonlyArray<{ value: string; after: string; before: string }
 
 const MAX_SUGGESTIONS = 8;
 
-/** Completions for the term at the caret: key names, then values (authors, refs, Jira keys, dates). */
+/**
+ * Files and folders for a `path:` value, like a shell completes: what is in the typed folder and
+ * starts with the rest (folders first), else any path containing what was typed. Globs get none.
+ */
+export function pathSuggestions(typed: string, paths: readonly string[]): Array<{ path: string; folder: boolean }> {
+  if (/[*?[]/.test(typed)) return [];
+  const slash = typed.lastIndexOf('/');
+  const folder = typed.slice(0, slash + 1);
+  const rest = typed.slice(slash + 1).toLowerCase();
+  const folders = new Set<string>();
+  const files: string[] = [];
+  for (const path of paths) {
+    if (!path.startsWith(folder)) continue;
+    const inside = path.slice(folder.length);
+    if (!inside.toLowerCase().startsWith(rest)) continue;
+    const end = inside.indexOf('/');
+    if (end === -1) files.push(path);
+    else folders.add(folder + inside.slice(0, end + 1));
+  }
+  const near = [...[...folders].sort().map((path) => ({ path, folder: true })), ...files.map((path) => ({ path, folder: false }))];
+  if (near.length > 0 || typed === '') return near.slice(0, MAX_SUGGESTIONS);
+  const needle = typed.toLowerCase();
+  return paths
+    .filter((path) => path.toLowerCase().includes(needle))
+    .slice(0, MAX_SUGGESTIONS)
+    .map((path) => ({ path, folder: false }));
+}
+
+/** Completions for the term at the caret: key names, then values (authors, refs, Jira keys, dates, paths). */
 export function suggest(query: string, caret: number, source: SuggestionSource): Suggestions {
   const terms = parseQuery(query);
   const { start, end } = termAt(terms, caret);
@@ -439,6 +487,14 @@ export function suggest(query: string, caret: number, source: SuggestionSource):
         label: hint.value,
         detail: key === 'after' ? hint.after : hint.before,
         insert: value(hint.value),
+      }));
+      break;
+    case 'path':
+      items = pathSuggestions(keyed[2]!.replace(/^"|"$/g, ''), source.paths ?? []).map((entry) => ({
+        label: entry.path,
+        detail: entry.folder ? 'folder' : 'file',
+        // A folder keeps the term open to go deeper; quoting would close it.
+        insert: entry.folder && !/[\s"]/.test(entry.path) ? `${negate}path:${entry.path}` : value(entry.path),
       }));
       break;
   }

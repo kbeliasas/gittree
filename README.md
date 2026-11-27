@@ -6,8 +6,7 @@ diffs in your browser. It runs on your own machine, only reads your repository, 
 ![gittree's History view: a commit graph with feature branches, an octopus merge and criss-cross merges, next to the details of a selected merge commit](docs/screenshot.png)
 
 > **Status:** early development (v0.1.0). The History view (commit graph, search, commit details and diffs) works.
-> Path and content search, simplified graph views, Branches, File history & blame, Stats and Settings come next; see
-> the [roadmap](#roadmap).
+> Simplified graph views, Branches, File history & blame, Stats and Settings come next; see the [roadmap](#roadmap).
 
 - [Features](#features)
 - [Requirements](#requirements)
@@ -56,19 +55,28 @@ diffs in your browser. It runs on your own machine, only reads your repository, 
   | `ref:release/*` | Commits a branch or tag points at; `*` and `?` match anything, and `origin/x` also matches as `x` |
   | `jira:SHOP-12` · `jira:SHOP` | Commits that mention the issue (or any issue of the project), and the commits of branches named after it |
   | `merges:only` · `merges:none` | Only merge commits, or no merge commits |
+  | `path:src/api` · `path:**/*.md` | Commits that changed a file or anything in a folder. With `*`, `?` or `[` it's a git glob: `*` stays within one folder, `**` crosses folders (`*.md` is top-level only) |
+  | `content:parseToken` | Commits that add or remove this exact text, case-sensitively (`git log -S`) |
+  | `regex:/retr(y\|ies)/i` | Commits with an added or removed line matching a POSIX extended regular expression (`git log -G`); `i` ignores case |
   | `"fix login"` | A phrase; quotes also hold values with spaces: `author:"Alice Smith"` |
   | `-term` | Leaves out what the term matches: `-author:bob`, `-wip` |
 
 - Every term has to match; the same token twice matches either value (`author:alice author:bob`).
 - **Matches: Dim** keeps the whole graph and dims the other commits; **Hide** shows only the matches, laid out on
   their own and linked through the commits in between.
-- Suggestions complete token names, authors (most commits first), branches and tags, Jira keys and dates.
-  <kbd>Enter</kbd> jumps to the first match, and <kbd>n</kbd> / <kbd>N</kbd> step through the matches.
+- Suggestions complete token names, authors (most commits first), branches and tags, Jira keys, dates, and the
+  files and folders at HEAD for `path:`. <kbd>Enter</kbd> jumps to the first match, and <kbd>n</kbd> / <kbd>N</kbd>
+  step through the matches.
 - Outside the bar, the query shows as chips: click one to edit it, ✕ to remove it. Terms that can't be used are
   marked in red and left out of the search.
 - **Tickets** lists the Jira issues in the history with their commit counts; pick one to search for it.
-- It all runs in the browser on the loaded history. Message bodies load in the background the first time you use
-  the search. Searching file paths and contents (`path:`, `content:`, `regex:`) comes next.
+- `path:`, `content:` and `regex:` look at each commit's own changes, so a merge only counts for `path:` when it
+  changed the file itself (resolving a conflict, say), and `content:` / `regex:` don't search merges. git answers
+  them on the server: matches light up as they're found, with progress and a **Stop** button that keeps what was
+  found so far. Finished searches are remembered until the history changes. In a partial clone, `content:` and
+  `regex:` need file contents that aren't stored locally, and say so; `path:` works.
+- Everything else runs in the browser on the loaded history. Message bodies load in the background the first time
+  you use the search.
 
 ### Commit details
 
@@ -327,8 +335,8 @@ gittree is designed to be safe to point at any repository on your machine.
 - In a partial clone (for example `git clone --filter=blob:none`), git would download missing file contents
   whenever a command needs them. gittree turns that off (`GIT_NO_LAZY_FETCH=1`): where contents aren't stored
   locally, a commit's file list has no line counts or renames, and its diffs say so and name the git command that
-  would download them. This needs git 2.44 or newer; older git ignores the setting and may still download them.
-  In a bare partial clone, `.mailmap` may not be applied.
+  would download them; `content:` and `regex:` searches say they can't run. This needs git 2.44 or newer; older
+  git ignores the setting and may still download them. In a bare partial clone, `.mailmap` may not be applied.
 - A test calls every endpoint on every fixture repository, partial clones included, and checks that no file in
   them changed: refs, index, working tree and object store stay byte-for-byte the same.
 - The one planned exception is an explicit **Fetch** button (`git fetch --all --prune`, [M4](#roadmap)).
@@ -471,7 +479,7 @@ gittree follows the milestones in [PLAN.md](PLAN.md):
 | ✅ | M0 Skeleton | CLI, local server with sign-in, read-only git runner, fixture repositories |
 | ✅ | M1 Graph | Commit graph and lane layout, hover and branch focus, keyboard navigation, URL state |
 | ✅ | M2 Details & diffs | Commit details, file lists, diff viewer, conflict resolutions, Jira and hosting links |
-| 🚧 | M3 Search & focus | ✅ A search bar (`author:`, `jira:`, dates, refs, negation, suggestions) that dims or hides non-matching commits, and a Jira ticket list. Next: `path:`, `content:` and `regex:` search; then branch visibility, first-parent and topology-only views |
+| 🚧 | M3 Search & focus | ✅ A search bar (`author:`, `jira:`, dates, refs, negation, suggestions) that dims or hides non-matching commits, and a Jira ticket list. ✅ `path:`, `content:` and `regex:` search on the server. Next: branch visibility, first-parent and topology-only views |
 | | M4 Repos & fetch | Settings view, recent repositories and scan roots, Cmd+K palette, a single shared instance, Fetch with progress, a "history changed" banner |
 | | M5 Branches | Stale, merged and upstream-gone branches with ahead/behind counts and copyable cleanup commands |
 | | M6 File history & blame | File finder, history across renames, blame tinted by age |

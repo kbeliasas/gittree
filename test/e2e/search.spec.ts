@@ -1,5 +1,6 @@
 import { expect, test, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
+import { NO_LAZY_FETCH_SUPPORTED } from '../helpers/git.ts';
 import { fixtures, startGittree, type Gittree } from './gittree.ts';
 
 /** PLAN §11 E2E for M3's search bar: suggestions, dim and hide, stepping, negation, tickets, bodies. */
@@ -167,8 +168,105 @@ test('the ticket list toggles jira: terms, counting branch commits too', async (
 });
 
 test('terms it cannot use are flagged and left out', async () => {
-  await page.goto(`${historyUrl}?q=${encodeURIComponent('path:src after:someday')}`);
-  await expect(page.locator('[data-chip="path"]')).toHaveAttribute('title', "path: search isn't available yet");
+  await page.goto(`${historyUrl}?q=${encodeURIComponent('regex:/x/g after:someday')}`);
+  await expect(page.locator('[data-chip="regex"]')).toHaveAttribute('title', /Only the i flag works/);
   await expect(page.locator('[data-chip="after"]')).toHaveAttribute('title', /Use a date like 2025-03-01/);
   await expect(page.locator('[role=option][data-dim]')).toHaveCount(0);
+});
+
+test.describe('server search', () => {
+  // Real code to search: retry and limit settings, a merge that resolved a conflict.
+  const { shas } = fixtures.repos.conflicts;
+  let server: Gittree;
+  let tab: Page;
+  let url: string;
+
+  test.beforeAll(async () => {
+    server = await startGittree(fixtures.repos.conflicts.dir);
+    tab = await context.newPage();
+    await tab.goto(server.authUrl);
+    await expect(tab).toHaveURL(/\/history$/);
+    url = tab.url();
+  });
+  test.afterAll(async () => {
+    await tab.close();
+    await server.stop();
+  });
+
+  const lit = () =>
+    tab.locator('[role=option]:not([data-dim])').evaluateAll((rows) => rows.map((r) => r.getAttribute('data-sha')));
+  const box = () => tab.getByRole('combobox', { name: 'Search commits' });
+  const option = (name: RegExp) => tab.getByRole('listbox', { name: 'Suggestions' }).getByRole('option', { name });
+
+  test('path: completes folders and files from HEAD, and finds the commits that changed them', async () => {
+    await box().focus();
+    await tab.keyboard.type('path:s');
+    await expect(option(/^src\/ folder/)).toBeVisible();
+    await tab.keyboard.press('Tab');
+    await expect(box()).toHaveValue('path:src/');
+    await expect(option(/^src\/retry\.ts file/)).toBeVisible();
+    await tab.keyboard.type('r');
+    await tab.keyboard.press('Tab');
+    await expect(box()).toHaveValue('path:src/retry.ts ');
+    await expect(tab.getByText('4 matches')).toBeVisible();
+    // The conflict resolution counts; the whitespace-only commit on limits.ts doesn't.
+    expect(await lit()).toEqual([shas['conflict-merge'], shas['main-side'], shas['feature-tip'], shas.root]);
+  });
+
+  test('content: and regex: search changed text; Enter waits for the server, then goes to the first match', async () => {
+    await tab.goto(url);
+    await box().focus();
+    await tab.keyboard.type('content:attempts');
+    await tab.keyboard.press('Enter');
+    await expect(tab.locator('[data-commit-list]')).toBeFocused();
+    await expect(tab.locator(`[role=option][data-sha="${shas.root}"]`)).toHaveAttribute('aria-selected', 'true');
+    expect(await lit()).toEqual([shas.root]);
+
+    await tab.goto(`${url}?q=${encodeURIComponent('regex:/ATTEMPTS: [0-9]/i')}`);
+    await expect(tab.getByText('3 matches')).toBeVisible();
+    await tab.goto(`${url}?q=${encodeURIComponent('-path:src/limits.ts')}`);
+    await expect(tab.getByText('No matches')).toBeVisible(); // every commit changed limits.ts
+  });
+
+  test('a regex git rejects shows git’s reason on the chip', async () => {
+    await tab.goto(`${url}?q=${encodeURIComponent('regex:/(/ retry')}`);
+    await expect(tab.locator('[data-chip="regex"]')).toHaveAttribute('title', /Invalid regular expression.*POSIX extended/);
+    await expect(tab.getByText('3 matches')).toBeVisible(); // "retry" alone still applies
+  });
+
+  test('Stop keeps what was found; Search again starts over', async () => {
+    // Hold the search request, so it is still running when Stop is pressed.
+    const isSearch = (address: URL) => address.pathname.endsWith('/search');
+    await tab.route(isSearch, () => {});
+    await tab.goto(`${url}?q=${encodeURIComponent('content:"delayMs: 500"')}`);
+    const progress = tab.locator('[data-search-progress]');
+    await expect(progress).toContainText('Searching contents');
+    await progress.getByRole('button', { name: 'Stop' }).click();
+    await expect(tab.getByText('stopped, partial')).toBeVisible();
+    await expect(progress).toHaveCount(0);
+
+    await tab.unroute(isSearch);
+    await tab.getByRole('button', { name: 'Search again' }).click();
+    await expect(tab.getByText('1 match')).toBeVisible(); // main's "Retry once, back off longer"
+    await expect(tab.getByText('stopped, partial')).toHaveCount(0);
+  });
+
+  test('in a partial clone, path: works and content: explains why it cannot', async ({ browser }) => {
+    test.skip(!NO_LAZY_FETCH_SUPPORTED, 'git < 2.44 would download the missing contents');
+    const partial = await startGittree(fixtures.repos.partial.dir);
+    const other = await browser.newContext();
+    try {
+      const page2 = await other.newPage();
+      await page2.goto(partial.authUrl);
+      await expect(page2).toHaveURL(/\/history$/);
+      const base = page2.url();
+      await page2.goto(`${base}?q=${encodeURIComponent('path:NOTES.md')}`);
+      await expect(page2.getByText('2 matches')).toBeVisible();
+      await page2.goto(`${base}?q=${encodeURIComponent('content:attempts')}`);
+      await expect(page2.locator('[data-chip="content"]')).toHaveAttribute('title', /partial clone.*path: search still works/);
+    } finally {
+      await other.close();
+      await partial.stop();
+    }
+  });
 });

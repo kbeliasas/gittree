@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 
 import { cx } from '../../lib/cx.ts';
-import { parseQuery, removeTerm, suggest, type SuggestionSource, type Term } from '../../lib/query.ts';
+import { removeTerm, suggest, type SuggestionSource, type Term } from '../../lib/query.ts';
 
 interface SearchBarProps {
   /** The query in the URL. */
   value: string;
+  /** `value`'s terms, with errors only the server knows (an invalid regex, …), for the chips. */
+  terms: readonly Term[];
   /** `push` starts a Back entry; the rest of one editing session replaces it. */
   onChange(query: string, history: 'push' | 'replace'): void;
   suggestions: SuggestionSource;
@@ -25,7 +27,7 @@ const TYPING_DELAY_MS = 150;
  * PLAN §8 "one bar with chips": a text field with completions while it has
  * the focus, and the query's terms as removable chips while it hasn't.
  */
-export function SearchBar({ value, onChange, suggestions, onActivate, onSubmit, onLeave, inputRef }: SearchBarProps) {
+export function SearchBar({ value, terms, onChange, suggestions, onActivate, onSubmit, onLeave, inputRef }: SearchBarProps) {
   const [draft, setDraft] = useState(value);
   const [editing, setEditing] = useState(false);
   const [caret, setCaret] = useState(0);
@@ -139,7 +141,6 @@ export function SearchBar({ value, onChange, suggestions, onActivate, onSubmit, 
     inputRef.current?.focus();
   };
 
-  const terms = useMemo(() => parseQuery(value), [value]);
   const showChips = !editing && terms.length > 0;
 
   return (

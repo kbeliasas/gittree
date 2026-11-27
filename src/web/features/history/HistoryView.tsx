@@ -11,13 +11,13 @@ import type { GraphView } from '../../graph/view.ts';
 import { cx } from '../../lib/cx.ts';
 import { numberFormat, plural, shortSha } from '../../lib/format.ts';
 import { commitQuery, settingsQuery } from '../../lib/queries.ts';
-import { toggleJira, type QueryMatch, type Term } from '../../lib/query.ts';
+import { isApplied, parseQuery, SERVER_KEYS, toggleJira, type QueryMatch, type Term } from '../../lib/query.ts';
 import type { HistorySearch } from '../../lib/search.ts';
 import { DetailsPanel } from '../details/DetailsPanel.tsx';
 import { DiffPanel } from '../diff/DiffPanel.tsx';
 import { SearchBar } from '../search/SearchBar.tsx';
 import { TicketList } from '../search/TicketList.tsx';
-import { nextMatch, useSearch } from '../search/useSearch.ts';
+import { nextMatch, useSearch, type SearchResult } from '../search/useSearch.ts';
 import { CommitList } from './CommitList.tsx';
 import { emphasisInView, maskInView, useGraph, useHover, useShownGraph, type Emphasis, type LoadedGraph } from './state.ts';
 
@@ -89,8 +89,11 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
     }),
     [model, search.parent],
   );
+  /** Enter on a query the server still answers: the first match, once there is one. */
+  const pendingJump = useRef<string | null>(null);
   const select = useCallback(
     (row: number, replace = false) => {
+      pendingJump.current = null;
       if (model.commits[row]) update(selection(row), replace);
     },
     [model, update, selection],
@@ -158,22 +161,41 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
     },
     [found.match, selected, select],
   );
-  const setQuery = useCallback((q: string, history: 'push' | 'replace') => update({ q: q || undefined }, history === 'replace'), [update]);
+  const setQuery = useCallback(
+    (q: string, history: 'push' | 'replace') => {
+      pendingJump.current = null;
+      update({ q: q || undefined }, history === 'replace');
+    },
+    [update],
+  );
   /** Enter in the search bar: the first match (unless the selection is one), then the commit list. */
   const goToResults = useCallback(
     (q: string, history: 'push' | 'replace' | null) => {
-      const match = found.matchFor(q);
       let patch: HistorySearch = history === null ? {} : { q: q || undefined };
       let replace = history === 'replace';
-      if (match && match.count > 0 && !match.rows[selected]) {
-        patch = { ...patch, ...selection(nextMatch(match.rows, -1, 1)) };
-        replace = false;
+      if (parseQuery(q).some((term) => isApplied(term) && SERVER_KEYS.has(term.key))) {
+        pendingJump.current = q; // the server's matches arrive later
+      } else {
+        const match = found.matchFor(q);
+        if (match && match.count > 0 && !match.rows[selected]) {
+          patch = { ...patch, ...selection(nextMatch(match.rows, -1, 1)) };
+          replace = false;
+        }
       }
       if (Object.keys(patch).length > 0) update(patch, replace);
       focusCommitList();
     },
     [found, selected, selection, update],
   );
+  useEffect(() => {
+    if (pendingJump.current === null || pendingJump.current !== query) return;
+    if (found.match && found.match.count > 0) {
+      if (found.match.rows[selected]) pendingJump.current = null;
+      else select(nextMatch(found.match.rows, -1, 1));
+    } else if (!found.server.progress) {
+      pendingJump.current = null; // done, and nothing matched
+    }
+  }, [query, found.match, found.server.progress, selected, select]);
 
   const diffOpen = search.file !== undefined;
   useHistoryKeys({
@@ -200,6 +222,7 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
         <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
           <SearchBar
             value={query}
+            terms={found.terms}
             onChange={setQuery}
             suggestions={found.suggestions}
             onActivate={() => setWantBodies(true)}
@@ -207,7 +230,14 @@ function History(props: { repoId: string; graph: LoadedGraph; search: HistorySea
             onLeave={focusCommitList}
             inputRef={searchInput}
           />
-          <MatchCount terms={found.terms} match={found.match} loading={found.loadingBodies} bodiesFailed={found.bodiesError} onStep={stepMatch} />
+          <MatchCount
+            terms={found.terms}
+            match={found.match}
+            loading={found.loadingBodies}
+            bodiesFailed={found.bodiesError}
+            server={found.server}
+            onStep={stepMatch}
+          />
           <TicketList
             tickets={found.tickets}
             terms={found.terms}
@@ -595,28 +625,31 @@ function Segmented<T extends string>(props: {
 }
 
 /** "12 matches", with buttons for n / N; or why the query can't be used. */
+const KIND_LABEL = { path: 'paths', content: 'contents', regex: 'changed lines' } as const;
+
 function MatchCount(props: {
   terms: readonly Term[];
   match: QueryMatch | null;
   loading: boolean;
   /** Why message bodies couldn't load; subjects are still searched. */
   bodiesFailed: string | null;
+  server: SearchResult['server'];
   onStep(direction: 1 | -1): void;
 }) {
-  const { terms, match, loading, bodiesFailed, onStep } = props;
-  if (!match) {
-    const problem = terms.find((t) => t.error);
-    return problem ? (
-      <span className="max-w-48 shrink truncate text-xs text-red-700 dark:text-red-400" title={problem.error}>
-        {problem.error}
-      </span>
-    ) : null;
-  }
+  const { terms, match, loading, bodiesFailed, server, onStep } = props;
+  const { progress } = server;
+  const problem = terms.find((t) => t.error);
+  const flagged = problem && (
+    <span className="max-w-48 shrink truncate text-xs text-red-700 dark:text-red-400" title={problem.error} data-search-problem>
+      {problem.error}
+    </span>
+  );
+  if (!match) return flagged ?? null;
   const button = 'rounded px-1 hover:bg-zinc-100 disabled:opacity-40 dark:hover:bg-zinc-800';
   return (
     <div className="flex shrink-0 items-center gap-0.5 text-xs text-zinc-600 dark:text-zinc-400" data-match-count>
       <span aria-live="polite" className="mr-1 tabular-nums" title={loading ? 'Still reading commit messages: only subjects searched so far' : undefined}>
-        {match.count === 0 ? 'No matches' : plural(match.count, 'match', 'matches')}
+        {match.count === 0 ? (progress ? 'No matches yet' : 'No matches') : plural(match.count, 'match', 'matches')}
         {loading && '…'}
       </span>
       {bodiesFailed && (
@@ -624,6 +657,25 @@ function MatchCount(props: {
           (subjects only)
         </span>
       )}
+      {progress ? (
+        <span className="mr-1 flex items-center gap-1" data-search-progress>
+          <span>Searching {progress.kinds.map((kind) => KIND_LABEL[kind]).join(' and ')}</span>
+          <progress className="h-1 w-12 accent-sky-600" max={progress.total} value={progress.searched} aria-label="Search progress" />
+          <button type="button" className={button} title="Stop searching; what was found so far stays" onClick={server.stop}>
+            Stop
+          </button>
+        </span>
+      ) : (
+        server.stopped && (
+          <span className="mr-1 flex items-center gap-1 text-amber-700 dark:text-amber-400">
+            stopped, partial
+            <button type="button" className={button} onClick={server.restart}>
+              Search again
+            </button>
+          </span>
+        )
+      )}
+      {flagged}
       <button type="button" className={button} aria-label="Previous match" title="Previous match (N)" disabled={match.count === 0} onClick={() => onStep(-1)}>
         ↑
       </button>

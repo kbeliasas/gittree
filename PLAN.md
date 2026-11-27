@@ -184,7 +184,7 @@ git CLI → .git on disk        ~/.config/gittree (settings, recents)   ~/.cache
 | Changed files | `git diff-tree -r -z -M --raw --numstat <parent> <sha>` (`--root <sha>` for root commits) · sizes from `git cat-file --batch-check` · a partial clone without the contents: `--raw --no-renames` (no counts, no renames) |
 | One file's diff | `git diff-tree -p -U<n> [-w] [-M] <parent> <sha> -- [<old path>] <path>` — whole file as context up to 1 MiB, else `-U3` |
 | Conflict resolutions | `git diff-tree -r -z --cc --raw -p <merge>` — files without a `--cc` hunk (clean 3-way merges) are left out |
-| Path / content search | `git log --format=%H <revs> -- <path>` · `git log -S<text>` / `-G<regex>` |
+| Path / content search | The graph page's commits (`rev-list --<order>-order --max-count --stdin`) in batches through `git diff-tree --stdin -r --root --no-renames --name-only --format=%x01%H` plus `-c -- <path>` (`:(glob)<path>` for globs) · `-S<text>` · `-G<regex> [-i]` |
 | Files at a commit | `git ls-tree -r -z --name-only <sha>` |
 | File history | `git log --follow --name-status --format=… <sha> -- <path>` |
 | Blame | `git blame --porcelain [-w] [-M -C] [--ignore-revs-file .git-blame-ignore-revs] <sha> -- <path>` |
@@ -207,8 +207,8 @@ a repo):
 | `GET /api/repos/:id` | HEAD, shallow, commit count, web link for commits (from `origin`'s URL, no API calls) |
 | `GET /api/repos/:id/commits/:sha?parent=1\|2…\|cc` | Full message, author and committer (with time zones), parents, changed files with status, +/−, renames, modes and sizes |
 | `GET /api/repos/:id/diff?sha&parent&path&ws` | Parsed hunks for one file (`path` must be in the commit's file list) |
-| `GET /api/repos/:id/search?path=\|content=\|regex=` | Matching SHAs (streamed; cancelled when the client disconnects) |
-| `GET /api/repos/:id/tree?at` · `file-history?path&at` · `blame?path&at&ws&moves` | File list · commits + rename points · line ranges → commit |
+| `GET /api/repos/:id/search?kind=path\|content\|regex&value&flags&order&limit` | NDJSON: progress events with the commits matched so far, then `done` (or `error`); git stops when the client disconnects. 400 `bad_regex`, 409 `objects_missing` before streaming |
+| `GET /api/repos/:id/tree?at` · `file-history?path&at` · `blame?path&at&ws&moves` | File list (M3, for `path:` suggestions) · commits + rename points · line ranges → commit |
 | `GET /api/repos/:id/stats?ref&since&until` | The four stats datasets |
 | `POST /api/repos/:id/fetch` | SSE progress, then the result |
 | `GET` / `PUT /api/settings` | Scan roots, Jira, thresholds, excluded paths (M2: `GET` only, Jira only) |
@@ -322,8 +322,20 @@ cursor from an older snapshot gets `409 snapshot_changed`.
   `jira:KEY`.
 - Instant, in the browser (an index built once per graph and message set; a query over 10k commits takes a few
   ms): text, author, dates, refs, Jira, merges. Message bodies come from `GET /api/repos/:id/messages`, loaded the
-  first time the search is used. On the server (async, cancellable, cached): `path:`, `content:`, `regex:`;
-  `path:` values with `*`, `?` or `[` are git globs (`*` within a folder, `**` across folders), others literal.
+  first time the search is used.
+- On the server: `path:`, `content:`, `regex:`, each a commit's *own* changes. `path:` = commits that changed a
+  matching file; a merge counts only when its combined diff touches it (`-c`: the file differs from every parent,
+  like a conflict resolution), not when it merely brought a branch's change in. Values with `*`, `?` or `[` are
+  git globs (`*` within a folder, `**` across folders), others literal; folders match everything inside.
+  `content:` = `-S` (the text's count changes; exact, case-sensitive), `regex:` = `-G` (POSIX extended, `/…/i`
+  ignores case); neither searches merges. The commits go to `git diff-tree --stdin` in batches (50 first, so
+  errors arrive before streaming; then 2,000 for paths, 250 for contents), up to 3 at once; each finished batch
+  streams its matches, which light up at once (a missing term matches nothing yet). Stop keeps the partial
+  result; finished searches are cached per snapshot on both sides. A term being typed waits 300 ms before
+  searching; Enter jumps to the first match once one arrives. Partial clones: `path:` works (trees only),
+  `content:`/`regex:` answer 409 `objects_missing`.
+- `path:` suggestions come from HEAD's file list (`/tree?at=<HEAD>`), shell-like: the typed folder's entries,
+  folders first (a folder keeps the term open), else any path containing the text.
 - Matches **dim** the rest, or the rest is **hidden**: the matches are laid out on their own in the worker, each
   linked to its nearest matching ancestors (first parent along its first-parent chain; side parents that are
   ancestors of another parent dropped). Search and branch focus beat hover highlighting.
@@ -468,7 +480,7 @@ and `/auth` proxied) and the server in watch mode; `pnpm build && pnpm link --gl
 | M0 | Skeleton — **done** | CLI → server → browser with token; git runner + allowlist; fixture builder; test setup | S |
 | M1 | Graph — **done** | Paged graph endpoint (newest 10k + "N older not shown" notice), lane-layout worker, virtualized list, ref badges, hover, selection, keyboard, URL state, branch focus (badge click), commit summary panel from graph data | L |
 | M2 | Details & diffs — **done** | Details panel (full message, author/committer, merged commits marked in the graph, contained-in, Jira links from the config file, link to the hosting service), file list per parent or conflict resolutions (`--cc`), diff viewer (split/unified, Shiki, word diff, folding, ignore whitespace, large-diff gate), diff keys | M |
-| M3 | Search & focus — **1 of 3 done** | Filter bar + syntax, path/content search, dim/hide, branch visibility, first-parent, topology only. Lands as three pull requests in sequence: (1) search bar, in-browser filters, dim/hide, suggestions, negation, Jira ticket list — **done**; (2) `path:` / `content:` / `regex:` on the server; (3) branch visibility, first-parent, topology only | L |
+| M3 | Search & focus — **2 of 3 done** | Filter bar + syntax, path/content search, dim/hide, branch visibility, first-parent, topology only. Lands as three pull requests in sequence: (1) search bar, in-browser filters, dim/hide, suggestions, negation, Jira ticket list — **done**; (2) `path:` / `content:` / `regex:` on the server, `path:` suggestions — **done**; (3) branch visibility, first-parent, topology only | L |
 | M4 | Repos & fetch | Settings file, recents + scan roots, Cmd+K, single instance, fetch with progress, refresh banner | M |
 | M5 | Branches | Branches table, staleness rules, ahead/behind, merged/gone, cleanup commands, focus link | M |
 | M6 | File history & blame | File finder, history across renames, blame with age tint, blame-before-change | M |
@@ -486,7 +498,7 @@ example, stats before search).
 | The local server exposes your code to other web pages (DNS rebinding, CSRF) | 127.0.0.1 only, random port, token cookie, Host/Origin checks, no CORS |
 | Fetch hangs on a credential prompt | Prompts disabled, SSH batch mode, 60 s timeout, clear error |
 | Interfering with your IDE's git use | Read commands only, `GIT_OPTIONAL_LOCKS=0`, retry transient lock errors |
-| git downloads what a partial clone lacks whenever a diff (or a bare repo's `.mailmap`) needs it: network access and new packs | `GIT_NO_LAZY_FETCH=1` (git 2.44+); commit details then list files without counts or renames, and diffs that need missing contents answer 409 `objects_missing`; the read-only test covers two partial clones. M7's `log --numstat` stats will meet the same |
+| git downloads what a partial clone lacks whenever a diff (or a bare repo's `.mailmap`) needs it: network access and new packs | `GIT_NO_LAZY_FETCH=1` (git 2.44+); commit details then list files without counts or renames, and diffs that need missing contents answer 409 `objects_missing`; the read-only test covers two partial clones. `content:`/`regex:` search answers 409 too (`path:` needs only trees). M7's `log --numstat` stats will meet the same |
 | Squash and rebase merges are invisible to "merged?" and habit stats | `git cherry` hint for rebases; squash merges estimated from messages and labeled as estimates |
 | Jira false positives (`UTF-8`, `SHA-256`) | Configured project keys; deny-list fallback |
 | One person with several emails skews stats | `.mailmap` (`%aN` / `%aE`); an alias editor later |
