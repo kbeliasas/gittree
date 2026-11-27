@@ -23,6 +23,11 @@ export interface GitRequest {
   maxOutputBytes?: number;
   /** Exit codes that count as success. Default: [0]. */
   okExitCodes?: readonly number[];
+  /**
+   * false lets `paths` use pathspec magic such as `:(glob)`. Paths are literal by default
+   * (GIT_LITERAL_PATHSPECS); only a search for a glob the user typed turns that off.
+   */
+  literalPathspecs?: boolean;
 }
 
 export interface GitResult {
@@ -111,7 +116,7 @@ function spawnGit(gitPath: string, argv: string[], env: NodeJS.ProcessEnv, req: 
 
     const child = spawn(gitPath, argv, {
       cwd: req.cwd,
-      env,
+      env: req.literalPathspecs === false ? { ...env, GIT_LITERAL_PATHSPECS: '0' } : env,
       stdio: [req.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       windowsHide: true,
       // Its own process group, so stopping git also stops helpers it started (ssh, textconv

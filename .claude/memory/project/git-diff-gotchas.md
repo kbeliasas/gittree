@@ -17,7 +17,8 @@ updated: 2026-11-27
 - **`git log -1 <id>`**: a tree id prints nothing with exit 0; an annotated tag id prints the commit it points
   at; a missing id exits 128 "bad object". The details route treats all three as 404 by comparing `%H`.
 - **Pathspecs are globs and magic by default** (`a[1].txt`, `:(glob)…`): the runner sets
-  `GIT_LITERAL_PATHSPECS=1` for every command. Revisit if M3's `path:` filter wants globs.
+  `GIT_LITERAL_PATHSPECS=1` for every command; only a `path:` search for a typed glob opts out (see
+  [[server-search-git]]).
 - Full-context trick: `-U<max blob size + 1>` makes one hunk holding the whole file (a file of n bytes has ≤ n+1
   lines); blob sizes come from one `cat-file --batch-check`.
 

@@ -32,6 +32,14 @@ const SAMPLES: Record<string, (sample: Sample) => string[]> = {
   'GET /api/repos/:id': ({ repo }) => [`/api/repos/${repo.id}`],
   'GET /api/repos/:id/graph': ({ repo }) => [`/api/repos/${repo.id}/graph`, `/api/repos/${repo.id}/graph?order=topo&limit=3`],
   'GET /api/repos/:id/messages': ({ repo }) => [`/api/repos/${repo.id}/messages`, `/api/repos/${repo.id}/messages?order=topo&limit=3`],
+  // Content and regex searches read file contents: partial clones answer 409 objects_missing.
+  'GET /api/repos/:id/search': ({ repo, file }) => [
+    `/api/repos/${repo.id}/search?kind=path&value=${encodeURIComponent(file ?? 'README.md')}`,
+    `/api/repos/${repo.id}/search?kind=path&value=${encodeURIComponent('**/*.md')}&order=topo`,
+    `/api/repos/${repo.id}/search?kind=content&value=the`,
+    `/api/repos/${repo.id}/search?kind=regex&value=${encodeURIComponent('[a-z]+')}&flags=i`,
+  ],
+  'GET /api/repos/:id/tree': ({ repo, head }) => (head ? [`/api/repos/${repo.id}/tree?at=${head}`] : []),
   'GET /api/repos/:id/commits/:sha': ({ repo, head, merge }) => [
     ...(head ? [`/api/repos/${repo.id}/commits/${head}`] : []),
     ...(merge ? [`/api/repos/${repo.id}/commits/${merge}?parent=2`, `/api/repos/${repo.id}/commits/${merge}?parent=cc`] : []),

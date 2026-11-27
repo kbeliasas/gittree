@@ -9,8 +9,10 @@ import {
   matchQuery,
   parseDateBound,
   parseQuery,
+  pathSuggestions,
   quoteValue,
   removeTerm,
+  serverTermKey,
   suggest,
   toggleJira,
   type SuggestionSource,
@@ -59,11 +61,12 @@ describe('parseQuery', () => {
   });
 
   it('flags values it cannot use, and leaves unfinished ones out quietly', () => {
-    expect(brief('after:soon before:2025-02-30 merges:maybe path:src')).toEqual([
+    expect(brief('after:soon before:2025-02-30 merges:maybe regex:/x/g path:src')).toEqual([
       { key: 'after', value: 'soon', negate: false, error: true },
       { key: 'before', value: '2025-02-30', negate: false, error: true },
       { key: 'merges', value: 'maybe', negate: false, error: true },
-      { key: 'path', value: 'src', negate: false, error: true }, // server search comes later
+      { key: 'regex', value: 'x', negate: false, error: true }, // only the i flag
+      { key: 'path', value: 'src', negate: false },
     ]);
     const [unfinished] = parseQuery('author:');
     expect(unfinished).toMatchObject({ key: 'author', value: '' });
@@ -136,8 +139,15 @@ function index(bodies = true) {
 }
 
 /** Subjects of the rows a query selects; null when it selects by nothing. */
-function search(query: string, options: { bodies?: boolean } = {}): string[] | null {
-  const match = matchQuery(parseQuery(query), index(options.bodies ?? true), NOW);
+function search(query: string, options: { bodies?: boolean; server?: Record<string, number[]> } = {}): string[] | null {
+  const server = new Map(
+    Object.entries(options.server ?? {}).map(([key, rows]) => {
+      const mask = new Uint8Array(ROWS.length);
+      for (const row of rows) mask[row] = 1;
+      return [key, mask];
+    }),
+  );
+  const match = matchQuery(parseQuery(query), index(options.bodies ?? true), NOW, server);
   if (!match) return null;
   expect(match.count).toBe(match.rows.reduce((sum, v) => sum + v, 0));
   return ROWS.filter((_, row) => match.rows[row] === 1).map((r) => r.subject);
@@ -197,11 +207,26 @@ describe('matchQuery', () => {
     expect(search('jira:SHOP -jira:SHOP-20')).toEqual(["Merge branch 'feature/SHOP-15-cart'", 'Cart page']);
   });
 
+  it('uses what the server searches found so far; nothing yet matches nothing', () => {
+    const found = { [serverTermKey({ key: 'path', value: 'src/cart' })]: [3, 4] };
+    expect(search('path:src/cart', { server: found })).toEqual(['Cart page', 'Login API client']);
+    expect(search('path:src/cart')).toEqual([]); // still searching
+    expect(search('-path:src/cart merges:none', { server: found })).toEqual(['Release 1.1.0', 'SHOP-20 Search results', 'Initial commit']);
+    expect(search('path:src/cart path:docs', { server: { ...found, [serverTermKey({ key: 'path', value: 'docs' })]: [0] } })).toEqual([
+      'Release 1.1.0',
+      'Cart page',
+      'Login API client',
+    ]);
+    // regex: flags are part of the search; content: and path: have none.
+    expect(serverTermKey({ key: 'regex', value: 'a', flags: 'i' })).not.toBe(serverTermKey({ key: 'regex', value: 'a', flags: '' }));
+    expect(serverTermKey({ key: 'regex', value: 'a', flags: '' })).toBe(serverTermKey({ key: 'regex', value: 'a' }));
+  });
+
   it('selects by nothing when no term can be used', () => {
     expect(search('')).toBeNull();
     expect(search('author: after:someday')).toBeNull();
-    expect(search('path:src')).toBeNull();
-    expect(search('path:src cart')).toEqual(["Merge branch 'feature/SHOP-15-cart'", 'Cart page']); // the rest still applies
+    expect(search('regex:/x/g')).toBeNull();
+    expect(search('regex:/x/g cart')).toEqual(["Merge branch 'feature/SHOP-15-cart'", 'Cart page']); // the rest still applies
   });
 });
 
@@ -245,11 +270,12 @@ describe('suggest', () => {
       { key: 'SHOP-10', commits: 3 },
       { key: 'SHOP-1', commits: 1 },
     ],
+    paths: ['README.md', 'docs/guide.md', 'src/api/login.ts', 'src/api/session.ts', 'src/app.ts', 'with space/file.txt'],
   };
   const labels = (query: string, caret = query.length) => suggest(query, caret, source).items.map((s) => s.label);
 
   it('lists the keys in an empty bar, and completes key names', () => {
-    expect(labels('')).toEqual(['author:', 'after:', 'before:', 'ref:', 'jira:', 'merges:']);
+    expect(labels('')).toEqual(['author:', 'after:', 'before:', 'ref:', 'jira:', 'merges:', 'path:', 'content:', 'regex:']);
     expect(labels('a')).toEqual(['author:', 'after:']);
     expect(labels('-a')).toEqual(['-author:', '-after:']);
     expect(labels('author')).toEqual(['author:']);
@@ -274,6 +300,20 @@ describe('suggest', () => {
     expect(labels('merges:')).toEqual(['only', 'none']);
     expect(labels('after:1')).toEqual(['1w', '1m', '1y']);
     expect(suggest('before:1', 8, source).items.find((s) => s.label === '1y')?.detail).toBe('More than a year ago');
+  });
+
+  it('completes paths like a shell: the typed folder first, then anything containing the text', () => {
+    expect(labels('path:')).toEqual(['docs/', 'src/', 'with space/', 'README.md']);
+    expect(labels('path:src/')).toEqual(['src/api/', 'src/app.ts']);
+    expect(labels('path:src/a')).toEqual(['src/api/', 'src/app.ts']);
+    expect(labels('path:src/api/s')).toEqual(['src/api/session.ts']);
+    expect(labels('path:login')).toEqual(['src/api/login.ts']); // no such folder entry: anywhere
+    expect(labels('path:**/*.ts')).toEqual([]); // globs get none
+    // A folder keeps the term open; a file (or a folder that needs quotes) closes it.
+    expect(suggest('path:sr', 7, source).items[0]?.insert).toBe('path:src/');
+    expect(suggest('-path:src/api/l', 15, source).items[0]?.insert).toBe('-path:src/api/login.ts ');
+    expect(suggest('path:wi', 7, source).items[0]?.insert).toBe('path:"with space/" ');
+    expect(pathSuggestions('x', [])).toEqual([]);
   });
 
   it('replaces the whole term under the caret, and stays quiet once a value is complete', () => {

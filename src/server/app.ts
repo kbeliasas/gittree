@@ -19,6 +19,7 @@ import { commitRoutes } from './routes/commits.ts';
 import { graphRoutes } from './routes/graph.ts';
 import { healthRoutes } from './routes/health.ts';
 import { repoRoutes } from './routes/repos.ts';
+import { searchRoutes } from './routes/search.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { installGuard } from './security/guard.ts';
 import { API_RATE_LIMIT, rateLimitOptions, type ApiRateLimit } from './security/rate-limit.ts';
@@ -96,6 +97,7 @@ export async function createApp(options: AppOptions): Promise<App> {
   repoRoutes(app, { git: options.git, registry: options.registry });
   graphRoutes(app, { git: options.git, registry: options.registry });
   commitRoutes(app, { git: options.git, registry: options.registry });
+  searchRoutes(app, { git: options.git, registry: options.registry });
   settingsRoutes(app, { configDir: options.configDir });
   await registerWeb(fastify, { webRoot: options.webRoot });
 

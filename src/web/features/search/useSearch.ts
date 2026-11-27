@@ -4,9 +4,19 @@ import { useCallback, useMemo } from 'react';
 import { errorMessage } from '../../components/Screens.tsx';
 import { parentCount } from '../../graph/dag.ts';
 import { jiraMatcher } from '../../lib/jira.ts';
-import { messagesQuery, settingsQuery } from '../../lib/queries.ts';
-import { buildSearchIndex, matchQuery, parseQuery, type QueryMatch, type SuggestionSource, type Term } from '../../lib/query.ts';
+import { messagesQuery, settingsQuery, treeQuery } from '../../lib/queries.ts';
+import {
+  buildSearchIndex,
+  matchQuery,
+  parseQuery,
+  SERVER_KEYS,
+  serverTermKey,
+  type QueryMatch,
+  type SuggestionSource,
+  type Term,
+} from '../../lib/query.ts';
 import type { LoadedGraph } from '../history/state.ts';
+import { useServerSearch, type ServerSearch } from './useServerSearch.ts';
 
 export interface Ticket {
   key: string;
@@ -15,6 +25,7 @@ export interface Ticket {
 }
 
 export interface SearchResult {
+  /** The query's terms; server terms that failed carry their error. */
   terms: Term[];
   /** The rows the query matches; null when it selects by nothing. */
   match: QueryMatch | null;
@@ -27,16 +38,33 @@ export interface SearchResult {
   tickets: Ticket[];
   /** Runs another query against the same commits (for Enter, before the URL has the new query). */
   matchFor(query: string): QueryMatch | null;
+  /** `path:`, `content:` and `regex:` searches on the server. */
+  server: Omit<ServerSearch, 'rows' | 'errors'>;
 }
 
 /**
- * PLAN §8 search, all in the browser: the query against subjects, bodies,
- * hashes, refs, authors, dates and Jira keys of the loaded graph. Bodies load
- * once something asks for them (`wantBodies`, or any query).
+ * PLAN §8 search: the query against subjects, bodies, hashes, refs, authors,
+ * dates and Jira keys of the loaded graph, in the browser, plus `path:`,
+ * `content:` and `regex:` terms the server answers. Bodies and HEAD's file list
+ * (for `path:` suggestions) load once something asks for them (`wantBodies`, or
+ * any query).
  */
 export function useSearch(repoId: string, graph: LoadedGraph, query: string, wantBodies: boolean): SearchResult {
   const { model, analysis } = graph;
-  const terms = useMemo(() => parseQuery(query), [query]);
+  const parsed = useMemo(() => parseQuery(query), [query]);
+  const { rows: serverRows, errors: serverErrors, ...server } = useServerSearch(repoId, model, parsed);
+  const terms = useMemo(
+    () =>
+      serverErrors.size === 0
+        ? parsed
+        : parsed.map((term) => {
+            const error = SERVER_KEYS.has(term.key) ? serverErrors.get(serverTermKey(term)) : undefined;
+            return error && !term.error ? { ...term, error } : term;
+          }),
+    [parsed, serverErrors],
+  );
+  const headSha = model.payload.head.sha;
+  const tree = useQuery({ ...treeQuery(repoId, headSha ?? ''), enabled: wantBodies && headSha !== null });
   const messages = useQuery({
     ...messagesQuery(repoId, model.payload.order, model.payload.snapshot),
     enabled: wantBodies || query.trim() !== '',
@@ -62,7 +90,7 @@ export function useSearch(repoId: string, graph: LoadedGraph, query: string, wan
       }),
     [model, analysis, bodies, matcher],
   );
-  const match = useMemo(() => matchQuery(terms, index, new Date()), [terms, index]);
+  const match = useMemo(() => matchQuery(terms, index, new Date(), serverRows), [terms, index, serverRows]);
 
   const tickets = useMemo(() => {
     const counts = new Map<string, number>();
@@ -79,10 +107,11 @@ export function useSearch(repoId: string, graph: LoadedGraph, query: string, wan
       authors: model.payload.authors.map((author, i) => ({ ...author, commits: commits[i]! })),
       refs: model.payload.refs.map(({ name, kind }) => ({ name, kind })),
       jira: tickets,
+      paths: tree.data?.paths ?? null,
     };
-  }, [model, tickets]);
+  }, [model, tickets, tree.data]);
 
-  const matchFor = useCallback((other: string) => matchQuery(parseQuery(other), index, new Date()), [index]);
+  const matchFor = useCallback((other: string) => matchQuery(parseQuery(other), index, new Date(), serverRows), [index, serverRows]);
 
   return {
     terms,
@@ -92,6 +121,7 @@ export function useSearch(repoId: string, graph: LoadedGraph, query: string, wan
     suggestions,
     tickets,
     matchFor,
+    server,
   };
 }
 

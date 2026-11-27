@@ -9,6 +9,7 @@ import {
   RepoInfo,
   ReposResponse,
   SettingsResponse,
+  TreePayload,
   type CompareWith,
   type GraphOrder,
 } from '../../shared/api.ts';
@@ -52,6 +53,14 @@ export const messagesQuery = (repoId: string, order: GraphOrder, snapshot: strin
     queryKey: ['messages', repoId, order, snapshot],
     queryFn: ({ signal }) => getJson(`/api/repos/${repoId}/messages?order=${order}`, MessagesPayload, signal),
     structuralSharing: false, // large, and replaced wholesale
+  });
+
+/** Every file at a commit; `path:` suggestions use HEAD's. */
+export const treeQuery = (repoId: string, at: string) =>
+  queryOptions({
+    queryKey: ['tree', repoId, at],
+    queryFn: ({ signal }) => getJson(`/api/repos/${repoId}/tree?at=${at}`, TreePayload, signal),
+    structuralSharing: false,
   });
 
 /** Read from the config file on every request, so a page reload picks up hand edits (M4 adds the Settings view). */
