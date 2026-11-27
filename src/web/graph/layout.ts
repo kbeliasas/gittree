@@ -51,7 +51,7 @@ const CLOSING = -2;
  *  3. Lane 0 is reserved for the default branch's first-parent chain, so main
  *     is a straight line on the left.
  */
-export function computeLayout(dag: Dag, lines: Lines): Layout {
+export function computeLayout(dag: Dag, lines: Pick<Lines, 'owner' | 'mainline' | 'mainlineTip'>): Layout {
   const { count, parentStart, parentIdx } = dag;
   const { owner, mainline } = lines;
   const firstLane = lines.mainlineTip >= 0 ? 1 : 0;
