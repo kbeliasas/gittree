@@ -52,6 +52,27 @@ export function parseGraphLog(output: string): LogRecord[] {
   return records;
 }
 
+/** `git log` format for message bodies (everything after the subject): hash and body, each NUL-terminated. */
+export const BODY_LOG_FORMAT = '--format=%H%x00%b%x00';
+
+/** Bodies by hash, leaving out commits whose message is just a subject. */
+export function parseBodyLog(output: string): Map<string, string> {
+  const tokens = output.split('\0');
+  const fieldCount = tokens.length - 1;
+  if (fieldCount % 2 !== 0 || (tokens.at(-1) ?? '').trim() !== '') {
+    throw new Error(`unexpected git log output: ${fieldCount} fields is not a multiple of 2`);
+  }
+  const bodies = new Map<string, string>();
+  for (let i = 0; i < fieldCount; i += 2) {
+    const rawSha = tokens[i] ?? '';
+    const sha = rawSha.startsWith('\n') ? rawSha.slice(1) : rawSha;
+    if (!SHA.test(sha)) throw new Error(`unexpected git log output near commit ${JSON.stringify(sha.slice(0, 64))}`);
+    const body = (tokens[i + 1] ?? '').trim();
+    if (body !== '') bodies.set(sha, body);
+  }
+  return bodies;
+}
+
 function toSeconds(value: string): number {
   const seconds = Number.parseInt(value, 10);
   return Number.isSafeInteger(seconds) ? seconds : 0;
